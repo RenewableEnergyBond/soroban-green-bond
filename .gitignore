@@ -1,0 +1,26 @@
+# Build artifacts
+/target/
+
+# Compiled WASM
+*.wasm
+
+# Soroban network config (may contain keys)
+.soroban/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lock file is committed for reproducibility
+# Cargo.lock — keep this line commented out (we DO commit Cargo.lock)
