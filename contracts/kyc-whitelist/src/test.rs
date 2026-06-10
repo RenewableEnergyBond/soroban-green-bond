@@ -11,7 +11,7 @@ fn setup() -> (Env, KycWhitelistContractClient<'static>, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, KycWhitelistContract);
+    let contract_id = env.register(KycWhitelistContract, ());
     let client = KycWhitelistContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
 

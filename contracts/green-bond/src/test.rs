@@ -1,53 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{
-    testutils::{Address as _, Events},
-    Address, Env, String,
-};
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-struct TestEnv {
-    env: Env,
-    bond: GreenBondContractClient<'static>,
-    issuer: Address,
-    investor_a: Address,
-    investor_b: Address,
-}
-
-impl TestEnv {
-    fn setup_with_whitelist(whitelist_id: &Address) -> Self {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let bond_id = env.register_contract(None, GreenBondContract);
-        let bond = GreenBondContractClient::new(&env, &bond_id);
-
-        let issuer = Address::generate(&env);
-        let investor_a = Address::generate(&env);
-        let investor_b = Address::generate(&env);
-
-        bond.initialize(
-            &issuer,
-            &1_000_000_i128,    // €1 M (1 token = €1)
-            &1_900_000_000_u64, // maturity timestamp (far future)
-            &500_u32,           // 5.00 % coupon
-            &String::from_str(&env, "FRRBD00001"),
-            whitelist_id,
-        );
-
-        TestEnv {
-            env,
-            bond,
-            issuer,
-            investor_a,
-            investor_b,
-        }
-    }
-}
+use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
 // ---------------------------------------------------------------------------
 // Initialisation tests
@@ -60,7 +14,7 @@ fn test_initialize_stores_bond_info() {
     env.mock_all_auths();
     let mock_whitelist = Address::generate(&env);
 
-    let bond_id = env.register_contract(None, GreenBondContract);
+    let bond_id = env.register(GreenBondContract, ());
     let bond = GreenBondContractClient::new(&env, &bond_id);
     let issuer = Address::generate(&env);
 
@@ -88,7 +42,7 @@ fn test_double_initialize_panics() {
     env.mock_all_auths();
     let mock_whitelist = Address::generate(&env);
 
-    let bond_id = env.register_contract(None, GreenBondContract);
+    let bond_id = env.register(GreenBondContract, ());
     let bond = GreenBondContractClient::new(&env, &bond_id);
     let issuer = Address::generate(&env);
 
@@ -121,7 +75,7 @@ fn test_balance_defaults_to_zero() {
     env.mock_all_auths();
     let mock_whitelist = Address::generate(&env);
 
-    let bond_id = env.register_contract(None, GreenBondContract);
+    let bond_id = env.register(GreenBondContract, ());
     let bond = GreenBondContractClient::new(&env, &bond_id);
     let issuer = Address::generate(&env);
     let random = Address::generate(&env);

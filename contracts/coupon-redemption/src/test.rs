@@ -13,7 +13,7 @@ fn setup() -> (
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, CouponRedemptionContract);
+    let contract_id = env.register(CouponRedemptionContract, ());
     let client = CouponRedemptionContractClient::new(&env, &contract_id);
 
     let issuer = Address::generate(&env);
@@ -35,7 +35,7 @@ fn test_initialize_stores_addresses() {
 #[test]
 #[should_panic(expected = "already initialized")]
 fn test_double_initialize_panics() {
-    let (env, client, issuer, bond_contract, usdc_token) = setup();
+    let (_env, client, issuer, bond_contract, usdc_token) = setup();
     client.initialize(&issuer, &bond_contract, &usdc_token);
 }
 
