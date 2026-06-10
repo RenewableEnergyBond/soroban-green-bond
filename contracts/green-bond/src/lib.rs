@@ -13,7 +13,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Val, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -272,8 +272,11 @@ impl GreenBondContract {
             .get(&DataKey::WhitelistContract)
             .expect("not initialized");
 
+        let mut args: Vec<Val> = Vec::new(env);
+        args.push_back(address.to_val());
+
         let is_whitelisted: bool =
-            env.invoke_contract(&whitelist_id, &symbol_short!("is_wl"), (&address,).into_val(env));
+            env.invoke_contract(&whitelist_id, &symbol_short!("is_wl"), args);
 
         assert!(is_whitelisted, "address not in KYC whitelist");
     }

@@ -23,6 +23,26 @@ This repository contains the three Soroban smart contracts powering the Rebond g
 
 ---
 
+## Testnet Deployments
+
+> Deployed on Stellar testnet — 10 June 2026  
+> Deployer: `GBX3MIAPKVCMK5BJB4FQTADGYMDW7OBOTZXAME3WR4VL4FMADWGTVZO2`
+
+| Contract | Contract ID | Stellar Expert |
+|---|---|---|
+| KYC Whitelist | `CAZQL5DAN3MYX5QEIS3EVDEBN2S5AVYJE23EYBTW4L7C5XMJAOIXKL3J` | [View on testnet](https://stellar.expert/explorer/testnet/contract/CAZQL5DAN3MYX5QEIS3EVDEBN2S5AVYJE23EYBTW4L7C5XMJAOIXKL3J) |
+| Green Bond | `CB53OFE56JSBHHM4R7J4MU32LJL5F6OG5V7JRAXPL72MN3U44RZBEGS7` | [View on testnet](https://stellar.expert/explorer/testnet/contract/CB53OFE56JSBHHM4R7J4MU32LJL5F6OG5V7JRAXPL72MN3U44RZBEGS7) |
+| Coupon/Redemption | `CCN4YGOLXHQCWE6YTH4X5Q76YBHDHZQQPWCZ2Y5HTVRKIOERFNOEOQM7` | [View on testnet](https://stellar.expert/explorer/testnet/contract/CCN4YGOLXHQCWE6YTH4X5Q76YBHDHZQQPWCZ2Y5HTVRKIOERFNOEOQM7) |
+
+**Bond parameters (live on testnet):**
+- ISIN: `FRRBD00001`
+- Total supply: 1,000,000 tokens (1 token = €1 → €1M bond)
+- Coupon rate: 5.00% (500 bps)
+- Maturity: 2032
+- KYC Whitelist: enforced at contract level on every transfer
+
+---
+
 ## Architecture
 
 ```
