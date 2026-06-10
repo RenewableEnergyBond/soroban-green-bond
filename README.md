@@ -21,6 +21,8 @@ This repository contains the three Soroban smart contracts powering the Rebond g
 **Regulatory framework:** MiFID II security tokens, placement privé Art. L.411-2 CMF (France)  
 **License:** MIT
 
+📐 **[Technical Architecture →](ARCHITECTURE.md)** — C4 diagrams, runtime flows, Stellar integration points, security model.
+
 ---
 
 ## Testnet Deployments
