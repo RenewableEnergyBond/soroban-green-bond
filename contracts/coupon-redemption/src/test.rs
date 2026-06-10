@@ -3,7 +3,13 @@
 use super::*;
 use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
-fn setup() -> (Env, CouponRedemptionContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    CouponRedemptionContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 

@@ -150,10 +150,8 @@ impl KycWhitelistContract {
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
 
-        env.events().publish(
-            (Symbol::new(&env, "admin_transfer"),),
-            (&admin, &new_admin),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "admin_transfer"),), (&admin, &new_admin));
     }
 
     // -----------------------------------------------------------------------

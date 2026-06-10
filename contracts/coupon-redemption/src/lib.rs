@@ -76,12 +76,7 @@ impl CouponRedemptionContract {
     /// * `issuer`        – Address authorised to trigger payouts.
     /// * `bond_contract` – Address of the Soroban Green Bond contract.
     /// * `usdc_token`    – Address of the USDC token contract on Stellar mainnet.
-    pub fn initialize(
-        env: Env,
-        issuer: Address,
-        bond_contract: Address,
-        usdc_token: Address,
-    ) {
+    pub fn initialize(env: Env, issuer: Address, bond_contract: Address, usdc_token: Address) {
         if env.storage().instance().has(&DataKey::Initialized) {
             panic!("already initialized");
         }
@@ -97,8 +92,10 @@ impl CouponRedemptionContract {
             .set(&DataKey::NextCouponIndex, &0_u32);
         env.storage().instance().set(&DataKey::Initialized, &true);
 
-        env.events()
-            .publish((Symbol::new(&env, "cr_initialized"),), (&issuer, &bond_contract));
+        env.events().publish(
+            (Symbol::new(&env, "cr_initialized"),),
+            (&issuer, &bond_contract),
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -132,7 +129,7 @@ impl CouponRedemptionContract {
 
         env.events().publish(
             (Symbol::new(&env, "coupon_paid"),),
-            (holder_addresses.len() as u32,),
+            (holder_addresses.len(),),
         );
     }
 

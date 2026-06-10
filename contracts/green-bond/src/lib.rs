@@ -96,11 +96,18 @@ impl GreenBondContract {
             panic!("already initialized");
         }
         assert!(total_supply > 0, "total_supply must be positive");
-        assert!(coupon_rate_bps <= 10_000, "coupon_rate_bps must be <= 10000");
+        assert!(
+            coupon_rate_bps <= 10_000,
+            "coupon_rate_bps must be <= 10000"
+        );
 
         env.storage().instance().set(&DataKey::Issuer, &issuer);
-        env.storage().instance().set(&DataKey::TotalSupply, &total_supply);
-        env.storage().instance().set(&DataKey::MintedSupply, &0_i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalSupply, &total_supply);
+        env.storage()
+            .instance()
+            .set(&DataKey::MintedSupply, &0_i128);
         env.storage()
             .instance()
             .set(&DataKey::MaturityTimestamp, &maturity_timestamp);
@@ -202,10 +209,8 @@ impl GreenBondContract {
             .persistent()
             .set(&DataKey::Balance(to.clone()), &(to_balance + amount));
 
-        env.events().publish(
-            (Symbol::new(&env, "transfer"),),
-            (&from, &to, amount),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "transfer"),), (&from, &to, amount));
     }
 
     // -----------------------------------------------------------------------
