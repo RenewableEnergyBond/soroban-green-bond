@@ -44,12 +44,18 @@ graph TB
         UI["Web Frontend<br/>Vue.js"]
         API["Backend API<br/>Node.js"]
         PFOP["Project Finance<br/>Operating Platform<br/>(CFADS, DSCR, LLCR,<br/>covenant monitoring)"]
-        KYCW["KYC/KYB Workflow<br/>(off-chain verification)"]
+        KYCW["KYC/KYB Workflow<br/>Sumsub (off-chain verification)<br/><i>not funded by this grant</i>"]
     end
 
     subgraph "Stellar Integration Layer (this grant)"
         ADAPTER["Stellar Adapter<br/>Node.js module<br/>Horizon API + Soroban RPC"]
         DASH["Investor Dashboard<br/>rebond.eco/portfolio<br/>(on-chain data, read-only)"]
+        SWK["Stellar Wallets Kit<br/>(wallet connector, T2)"]
+    end
+
+    subgraph "Optional integrations (Tranche 3, &lt;1 week each)"
+        DFNS["DFNS<br/>MPC custody for<br/>institutional clients"]
+        ALLBRIDGE["Allbridge<br/>cross-chain USDC<br/>inflows (EVM/Solana)"]
     end
 
     subgraph "Stellar Network"
@@ -65,6 +71,11 @@ graph TB
     API --> PFOP
     API --> KYCW
     API --> ADAPTER
+    UI --> SWK
+    SWK -.->|"investor signs tx"| RPC
+    DASH -.-> SWK
+    DFNS -.->|"institutional custody"| SWK
+    ALLBRIDGE -.->|"foreign USDC inflow"| USDC
     ADAPTER -->|"contract deploy/invoke"| RPC
     ADAPTER -->|"accounts, payments,<br/>tx history"| HORIZON
     RPC --> GB
@@ -78,15 +89,18 @@ graph TB
 
 | Container | Technology | Status | Grant scope |
 |---|---|---|---|
-| Web Frontend | Vue.js | Live (multi-chain: ERC-1400, ERC-3643/T-REX) | — |
+| Web Frontend | Vue.js | Live (multi-chain) | — |
 | Backend API | Node.js | Live | — |
 | Project Finance Operating Platform | Node.js | Live at rebond.eco | — |
-| KYC/KYB Workflow | Node.js + provider | Live | — |
+| KYC/KYB Workflow | **Sumsub** (off-chain) | Live | — *(not funded by this grant)* |
 | **Stellar Adapter** | Node.js (Horizon + Soroban RPC) | Planned (Tranche 1) | ✅ |
+| **Stellar Wallets Kit** | JS wallet connector | Planned (Tranche 2) | ✅ (light) |
 | **Green Bond Contract** | Rust / Soroban SDK 22 | **Deployed on testnet** | ✅ |
 | **KYC Whitelist Contract** | Rust / Soroban SDK 22 | **Deployed on testnet** | ✅ |
 | **Coupon/Redemption Contract** | Rust / Soroban SDK 22 | **Deployed on testnet** (scaffold; full logic in Tranche 2) | ✅ |
 | **Investor Dashboard** | Vue.js | Planned (Tranche 2) | ✅ |
+| DFNS (MPC custody) | Stellar Integration List | Optional (Tranche 3) | ✅ (light, &lt;1 week) |
+| Allbridge (cross-chain USDC) | Stellar Integration List | Optional (Tranche 3) | ✅ (light, &lt;1 week) |
 
 ---
 
@@ -108,7 +122,7 @@ Core MiFID II security token. All bond parameters are immutably stored on-chain 
 
 ### 3.2 KYC Whitelist Contract ([contracts/kyc-whitelist](contracts/kyc-whitelist))
 
-On-chain registry of MiFID II-verified investor addresses. Fed by Rebond's off-chain KYC/KYB workflow via the Stellar Adapter.
+On-chain registry of MiFID II-verified investor addresses. Fed by Rebond's off-chain KYC/KYB workflow — powered by **Sumsub** (identity verification, AML screening, KYB for legal entities) — via the Stellar Adapter. Sumsub is an existing part of Rebond's platform OPEX and is **not funded by this grant**.
 
 | Function | Auth | Description |
 |---|---|---|
@@ -180,14 +194,26 @@ Investor dashboard (rebond.eco/portfolio) reads **directly from the chain** (Sor
 
 ## 5. Stellar Integration Points
 
-| Stellar component | Usage |
-|---|---|
-| **Soroban smart contracts** (Rust, SDK 22) | 3 contracts: security token, compliance registry, lifecycle payments |
-| **Native USDC** (Circle) | Coupon and principal settlement — replaces paying-agent banking rails |
-| **Soroban RPC** | Contract deployment, invocations, read-only simulations (dashboard) |
-| **Horizon API** | Account management, USDC payment submission, transaction history |
-| **Stellar Wallets Kit** | Investor wallet connection on the dashboard (Tranche 2) |
-| **Events + indexing** | All state changes emit events (`bond_initialized`, `wl_initialized`, `coupon_paid`, …) for audit trail and explorer visibility |
+### 5.1 Core (funded by this grant)
+
+| Stellar component | Usage | Tranche |
+|---|---|---|
+| **Soroban smart contracts** (Rust, SDK 22) | 3 contracts: security token, compliance registry, lifecycle payments | T1–T2 |
+| **Native USDC** (Circle) | Coupon and principal settlement — replaces paying-agent banking rails | T2–T3 |
+| **Soroban RPC** | Contract deployment, invocations, read-only simulations (dashboard) | T1–T3 |
+| **Horizon API** | Account management, USDC payment submission, transaction history | T1–T3 |
+| **Stellar Wallets Kit** | Investor wallet connection on the dashboard (multi-wallet: Freighter, Albedo, LOBSTR, xBull) | T2 |
+| **Events + indexing** | All state changes emit events (`bond_initialized`, `wl_initialized`, `coupon_paid`, …) for audit trail and explorer visibility | T1–T3 |
+
+### 5.2 Stellar Integration List components
+
+Items from the official Stellar Integration List that Rebond integrates or plans to integrate. Each optional item is a **light integration (&lt;1 week)** and is sized accordingly in the budget — they are not standalone milestones.
+
+| Integration List item | Role for Rebond | Status |
+|---|---|---|
+| **Stellar Wallets Kit** | Primary multi-wallet connector for qualified-retail investors (Freighter, Albedo, LOBSTR, xBull) | Core — Tranche 2 |
+| **DFNS** | Optional MPC custody for institutional clients and family offices without a browser wallet | Optional — Tranche 3 |
+| **Allbridge** | Optional cross-chain USDC inflows from EVM/Solana for foreign accredited investors | Optional — Tranche 3 |
 
 **Why Stellar:** ~$0.00001 per transaction and 5s finality make per-holder coupon distribution economically viable at any deal size; native USDC removes banking intermediaries from settlement; the network is regulatory-neutral for EU issuers (bond tokens are MiFID II financial instruments, out of MiCA scope).
 
@@ -199,7 +225,8 @@ Investor dashboard (rebond.eco/portfolio) reads **directly from the chain** (Sor
 - **Role separation:** issuer (mint, coupon triggers), whitelist admin (KYC registry), holders (transfers). Admin rotation supported.
 - **Supply cap:** `total_supply` immutable after initialization; `mint` enforces the cap (overflow-checked arithmetic, `overflow-checks = true` in release profile).
 - **Auditability:** every lifecycle action emits an event; full history reconstructable from chain data alone.
-- **Audit plan:** external audit of all three contracts before mainnet (Tranche 3 gate), via Stellar LaunchKit — **not** funded by the grant.
+- **Audit plan:** external audit of all three contracts before mainnet (Tranche 3 gate), via Stellar LaunchKit — **not funded by this grant**.
+- **KYC/KYB vendor:** Sumsub (identity verification, AML, KYB) — part of Rebond platform OPEX, **not funded by this grant**.
 - **CI:** every push runs the full test suite (15 unit tests), `clippy --all-targets -D warnings`, `rustfmt`, and a release WASM build ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
 ---
@@ -223,5 +250,17 @@ Live bond on testnet: ISIN-equivalent `FRRBD00001`, 1,000,000 tokens (1 token = 
 | Tranche | Scope | Key architecture milestones |
 |---|---|---|
 | **T1 — MVP** (M1-2) | Green Bond contract, KYC Whitelist, Stellar Adapter | Contracts hardened + full test coverage; backend can deploy/initialize/mint from Rebond UI |
-| **T2 — Testnet** (M3-4) | USDC coupon/redemption logic, investor onboarding, dashboard | End-to-end testnet demo: issuance → whitelist → coupon → redemption, with explorer links |
-| **T3 — Mainnet** (M5-6) | Audit remediation, mainnet deploy, first live issuance | First real bond (~€1M, LANGA International), first on-chain coupon, open-source release |
+| **T2 — Testnet** (M3-4) | USDC coupon/redemption logic, investor onboarding (Stellar Wallets Kit), dashboard | End-to-end testnet demo: issuance → whitelist → coupon → redemption, with explorer links |
+| **T3 — Mainnet** (M5-6) | Audit remediation, mainnet deploy, first live issuance, optional DFNS + Allbridge | First real bond (~€1M, LANGA International), first on-chain coupon, open-source release |
+
+### 8.1 Tranche 3 target metrics
+
+Quantified success targets for the mainnet tranche (verifiable on Stellar Expert):
+
+| Metric | Target |
+|---|---|
+| First live issuance (TVL on the bond contract) | **≥ €1,000,000** (LANGA International pilot) |
+| Qualified investor wallets onboarded on mainnet | **≥ 3** (via Stellar Wallets Kit / DFNS) |
+| On-chain settlement transactions (issuance + first coupon cycle) | **≥ 10** |
+| Coupon distribution | **1 full multi-recipient USDC coupon** executed on mainnet |
+| Contracts open-sourced (MIT) | **3 / 3** (Green Bond, KYC Whitelist, Coupon/Redemption) |
