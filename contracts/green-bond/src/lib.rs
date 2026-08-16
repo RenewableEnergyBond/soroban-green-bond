@@ -35,6 +35,12 @@ pub enum DataKey {
     CouponRateBps,
     /// ISIN-equivalent identifier stored as a Symbol
     Isin,
+    /// Human-readable token name (SEP-41 metadata)
+    Name,
+    /// Token symbol / ticker (SEP-41 metadata)
+    TokenSymbol,
+    /// Token decimals (SEP-41 metadata)
+    Decimals,
     /// Address of the KYC Whitelist contract
     WhitelistContract,
     /// Per-investor token balance
@@ -116,6 +122,10 @@ impl GreenBondContract {
     /// * `maturity_timestamp`  – Unix timestamp (seconds) of bond maturity.
     /// * `coupon_rate_bps`     – Annual coupon in basis points (500 = 5 %).
     /// * `isin`                – ISIN or internal bond identifier.
+    /// * `name`                – Human-readable token name (SEP-41 metadata).
+    /// * `symbol`              – Token symbol / ticker (SEP-41 metadata).
+    /// * `decimals`            – Token decimals (SEP-41 metadata; 0 for whole
+    ///                           bond units where 1 token = €1).
     /// * `whitelist_contract`  – Address of the deployed KYC Whitelist contract.
     pub fn initialize(
         env: Env,
@@ -124,6 +134,9 @@ impl GreenBondContract {
         maturity_timestamp: u64,
         coupon_rate_bps: u32,
         isin: String,
+        name: String,
+        symbol: String,
+        decimals: u32,
         whitelist_contract: Address,
     ) {
         if env.storage().instance().has(&DataKey::Initialized) {
@@ -150,6 +163,9 @@ impl GreenBondContract {
             .instance()
             .set(&DataKey::CouponRateBps, &coupon_rate_bps);
         env.storage().instance().set(&DataKey::Isin, &isin);
+        env.storage().instance().set(&DataKey::Name, &name);
+        env.storage().instance().set(&DataKey::TokenSymbol, &symbol);
+        env.storage().instance().set(&DataKey::Decimals, &decimals);
         env.storage()
             .instance()
             .set(&DataKey::WhitelistContract, &whitelist_contract);
@@ -262,6 +278,43 @@ impl GreenBondContract {
         );
     }
 
+    /// Burn `amount` tokens from `from`. Used at redemption: a holder returns
+    /// bond tokens in exchange for principal. Callable by the holder (directly
+    /// or via the Coupon/Redemption contract carrying the holder's auth).
+    ///
+    /// SEP-41 `burn`. Reduces both the holder balance and the circulating
+    /// supply so the total burned is reflected on-chain.
+    pub fn burn(env: Env, from: Address, amount: i128) {
+        from.require_auth();
+
+        assert!(amount > 0, "amount must be positive");
+        extend_instance_ttl(&env);
+
+        let from_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Balance(from.clone()))
+            .unwrap_or(0);
+        assert!(from_balance >= amount, "insufficient balance");
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
+        extend_balance_ttl(&env, &DataKey::Balance(from.clone()));
+
+        let minted: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MintedSupply)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::MintedSupply, &(minted - amount));
+
+        env.events()
+            .publish((Symbol::new(&env, "burn"), from.clone()), amount);
+    }
+
     // -----------------------------------------------------------------------
     // View functions
     // -----------------------------------------------------------------------
@@ -271,6 +324,30 @@ impl GreenBondContract {
         let key = DataKey::Balance(owner);
         extend_balance_ttl(&env, &key);
         env.storage().persistent().get(&key).unwrap_or(0)
+    }
+
+    /// SEP-41 metadata: human-readable token name.
+    pub fn name(env: Env) -> String {
+        env.storage()
+            .instance()
+            .get(&DataKey::Name)
+            .expect("not initialized")
+    }
+
+    /// SEP-41 metadata: token symbol / ticker.
+    pub fn symbol(env: Env) -> String {
+        env.storage()
+            .instance()
+            .get(&DataKey::TokenSymbol)
+            .expect("not initialized")
+    }
+
+    /// SEP-41 metadata: token decimals.
+    pub fn decimals(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Decimals)
+            .expect("not initialized")
     }
 
     /// Returns all immutable bond parameters.
