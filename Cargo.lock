@@ -643,6 +643,7 @@ dependencies = [
 name = "green-bond"
 version = "0.1.0"
 dependencies = [
+ "kyc-whitelist",
  "soroban-sdk",
 ]
 

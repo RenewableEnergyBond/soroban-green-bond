@@ -1,7 +1,20 @@
 #![cfg(test)]
 
 use super::*;
+use kyc_whitelist::{KycWhitelistContract, KycWhitelistContractClient};
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+/// Deploy a real KYC Whitelist contract in the test env and return its client.
+fn deploy_whitelist<'a>(env: &Env, admin: &Address) -> (Address, KycWhitelistContractClient<'a>) {
+    let wl_id = env.register(KycWhitelistContract, ());
+    let wl = KycWhitelistContractClient::new(env, &wl_id);
+    wl.initialize(admin);
+    (wl_id, wl)
+}
 
 // ---------------------------------------------------------------------------
 // Initialisation tests
@@ -93,7 +106,100 @@ fn test_balance_defaults_to_zero() {
 }
 
 // ---------------------------------------------------------------------------
-// Note: mint / transfer tests require the KYC Whitelist contract to be
-// deployed in the same test environment. Integration tests live in
-// tests/integration.rs once both contracts are registered.
+// Mint tests (real KYC Whitelist cross-contract enforcement)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn test_mint_to_whitelisted_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let (wl_id, wl) = deploy_whitelist(&env, &admin);
+
+    let bond_id = env.register(GreenBondContract, ());
+    let bond = GreenBondContractClient::new(&env, &bond_id);
+    let issuer = Address::generate(&env);
+    let investor = Address::generate(&env);
+
+    bond.initialize(
+        &issuer,
+        &1_000_000_i128,
+        &1_900_000_000_u64,
+        &500_u32,
+        &String::from_str(&env, "FRRBD00001"),
+        &wl_id,
+    );
+
+    wl.add(&investor);
+    bond.mint(&investor, &1_000_i128);
+
+    assert_eq!(bond.balance(&investor), 1_000);
+    assert_eq!(bond.get_bond_info().minted_supply, 1_000);
+}
+
+#[test]
+#[should_panic(expected = "address not in KYC whitelist")]
+fn test_mint_to_non_whitelisted_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let (wl_id, _wl) = deploy_whitelist(&env, &admin);
+
+    let bond_id = env.register(GreenBondContract, ());
+    let bond = GreenBondContractClient::new(&env, &bond_id);
+    let issuer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    bond.initialize(
+        &issuer,
+        &1_000_000_i128,
+        &1_900_000_000_u64,
+        &500_u32,
+        &String::from_str(&env, "FRRBD00001"),
+        &wl_id,
+    );
+
+    // `stranger` was never added to the whitelist → must revert.
+    bond.mint(&stranger, &1_000_i128);
+}
+
+// ---------------------------------------------------------------------------
+// Transfer tests — both parties must be whitelisted
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "address not in KYC whitelist")]
+fn test_transfer_reverts_when_sender_not_whitelisted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let (wl_id, wl) = deploy_whitelist(&env, &admin);
+
+    let bond_id = env.register(GreenBondContract, ());
+    let bond = GreenBondContractClient::new(&env, &bond_id);
+    let issuer = Address::generate(&env);
+    let holder = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    bond.initialize(
+        &issuer,
+        &1_000_000_i128,
+        &1_900_000_000_u64,
+        &500_u32,
+        &String::from_str(&env, "FRRBD00001"),
+        &wl_id,
+    );
+
+    // `holder` is whitelisted, receives tokens, then is de-listed.
+    wl.add(&holder);
+    wl.add(&recipient);
+    bond.mint(&holder, &1_000_i128);
+    wl.remove(&holder);
+
+    // `holder` is no longer whitelisted → transfer must revert on the `from` check.
+    bond.transfer(&holder, &recipient, &500_i128);
+}
+

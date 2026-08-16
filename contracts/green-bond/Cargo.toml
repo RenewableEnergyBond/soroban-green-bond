@@ -12,6 +12,7 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+kyc-whitelist = { path = "../kyc-whitelist" }
 
 [features]
 testutils = ["soroban-sdk/testutils"]
