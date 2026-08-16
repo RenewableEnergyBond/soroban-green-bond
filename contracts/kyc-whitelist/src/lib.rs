@@ -53,6 +53,7 @@ impl KycWhitelistContract {
         if env.storage().instance().has(&DataKey::Initialized) {
             panic!("already initialized");
         }
+        admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()

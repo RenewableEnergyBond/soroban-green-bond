@@ -95,6 +95,7 @@ impl GreenBondContract {
         if env.storage().instance().has(&DataKey::Initialized) {
             panic!("already initialized");
         }
+        issuer.require_auth();
         assert!(total_supply > 0, "total_supply must be positive");
         assert!(
             coupon_rate_bps <= 10_000,

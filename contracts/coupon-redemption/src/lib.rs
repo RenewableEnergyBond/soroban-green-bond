@@ -80,6 +80,7 @@ impl CouponRedemptionContract {
         if env.storage().instance().has(&DataKey::Initialized) {
             panic!("already initialized");
         }
+        issuer.require_auth();
         env.storage().instance().set(&DataKey::Issuer, &issuer);
         env.storage()
             .instance()
