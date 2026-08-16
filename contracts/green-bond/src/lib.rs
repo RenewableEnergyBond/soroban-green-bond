@@ -209,8 +209,10 @@ impl GreenBondContract {
             .instance()
             .set(&DataKey::MintedSupply, &(minted + amount));
 
+        // Address goes in the topics (indexed) so the dashboard can filter
+        // mints by investor without scanning every event.
         env.events()
-            .publish((Symbol::new(&env, "mint"),), (&to, amount));
+            .publish((Symbol::new(&env, "mint"), to.clone()), amount);
     }
 
     // -----------------------------------------------------------------------
@@ -251,8 +253,13 @@ impl GreenBondContract {
         extend_balance_ttl(&env, &DataKey::Balance(from.clone()));
         extend_balance_ttl(&env, &DataKey::Balance(to.clone()));
 
-        env.events()
-            .publish((Symbol::new(&env, "transfer"),), (&from, &to, amount));
+        // Both addresses go in the topics (indexed) so the dashboard can
+        // reconstruct a single investor's history by filtering on topics
+        // instead of downloading and sorting every contract event client-side.
+        env.events().publish(
+            (Symbol::new(&env, "transfer"), from.clone(), to.clone()),
+            amount,
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -132,8 +132,10 @@ impl KycWhitelistContract {
                 .set(&DataKey::WhitelistCount, &(count + 1));
             extend_instance_ttl(&env);
 
+            // Address indexed as a topic so a per-investor whitelist history
+            // can be queried without scanning all events.
             env.events()
-                .publish((Symbol::new(&env, "wl_add"),), (&address,));
+                .publish((Symbol::new(&env, "wl_add"), address.clone()), ());
         }
     }
 
@@ -170,7 +172,7 @@ impl KycWhitelistContract {
             }
 
             env.events()
-                .publish((Symbol::new(&env, "wl_remove"),), (&address,));
+                .publish((Symbol::new(&env, "wl_remove"), address.clone()), ());
         }
     }
 
