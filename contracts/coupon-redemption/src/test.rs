@@ -40,17 +40,20 @@ fn test_double_initialize_panics() {
 }
 
 #[test]
-fn test_pay_coupon_emits_event() {
+#[should_panic(expected = "not implemented, Tranche 2")]
+fn test_pay_coupon_not_implemented_reverts() {
     let (env, client, _, _, _) = setup();
     let holders: Vec<Address> = Vec::new(&env);
-    // Should not panic; full payout logic implemented in Tranche 2
+    // pay_coupon must fail explicitly until the Tranche 2 payout logic lands,
+    // rather than emit a success event for a payout that never happened.
     client.pay_coupon(&holders);
 }
 
 #[test]
-fn test_redeem_emits_event() {
+#[should_panic(expected = "not implemented, Tranche 2")]
+fn test_redeem_not_implemented_reverts() {
     let (env, client, _, _, _) = setup();
     let holder = Address::generate(&env);
-    // Should not panic; full redemption logic implemented in Tranche 2
+    // redeem must fail explicitly until the Tranche 2 redemption logic lands.
     client.redeem(&holder);
 }

@@ -109,29 +109,11 @@ impl CouponRedemptionContract {
     /// amount before calling this function. The contract verifies the payment
     /// timestamp has been reached and distributes funds atomically.
     ///
-    /// Full multi-recipient USDC payout implementation: Tranche 2.
-    pub fn pay_coupon(env: Env, holder_addresses: Vec<Address>) {
-        let issuer: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Issuer)
-            .expect("not initialized");
-        issuer.require_auth();
-
-        let _bond_contract: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::BondContract)
-            .expect("not initialized");
-
-        // TODO Tranche 2: for each holder in holder_addresses, read balance
-        // from the Green Bond contract, compute pro-rata USDC amount, and
-        // execute USDC transfer via the token contract interface.
-
-        env.events().publish(
-            (Symbol::new(&env, "coupon_paid"),),
-            (holder_addresses.len(),),
-        );
+    /// NOT YET IMPLEMENTED. The multi-recipient USDC payout logic is a Tranche 2
+    /// deliverable. Until then this function fails explicitly rather than
+    /// emitting a success event for a payout that never happened.
+    pub fn pay_coupon(_env: Env, _holder_addresses: Vec<Address>) {
+        panic!("not implemented, Tranche 2");
     }
 
     // -----------------------------------------------------------------------
@@ -141,22 +123,12 @@ impl CouponRedemptionContract {
     /// Redeem bond tokens at maturity. The caller must hold bond tokens.
     /// The contract burns the tokens and transfers the pro-rata USDC principal.
     ///
-    /// Full redemption implementation: Tranche 2.
-    pub fn redeem(env: Env, holder: Address) {
-        holder.require_auth();
-
-        let _bond_contract: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::BondContract)
-            .expect("not initialized");
-
-        // TODO Tranche 2: verify maturity timestamp reached, read holder balance
-        // from Green Bond contract, calculate USDC redemption amount, burn
-        // bond tokens, transfer USDC to holder.
-
-        env.events()
-            .publish((Symbol::new(&env, "redeemed"),), (&holder,));
+    /// NOT YET IMPLEMENTED. The redemption logic (token burn + USDC principal
+    /// transfer) is a Tranche 2 deliverable. Until then this function fails
+    /// explicitly rather than emitting a success event for a redemption that
+    /// never happened.
+    pub fn redeem(_env: Env, _holder: Address) {
+        panic!("not implemented, Tranche 2");
     }
 
     // -----------------------------------------------------------------------
