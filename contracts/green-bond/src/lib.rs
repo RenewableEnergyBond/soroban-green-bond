@@ -61,6 +61,40 @@ pub struct BondInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Storage TTL (rent) management
+// ---------------------------------------------------------------------------
+//
+// Soroban storage is rented, not owned: every entry has an expiration ledger
+// and is archived if nobody extends it. This bond matures in 2032, so investor
+// balances and whitelist entries must be periodically bumped to stay live.
+// We extend the relevant entries on every interaction.
+
+/// ~1 day of ledgers at a 5-second close time.
+const DAY_IN_LEDGERS: u32 = 17_280;
+/// Instance storage (bond parameters) is bumped ~30 days ahead on each call.
+const INSTANCE_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
+const INSTANCE_LIFETIME_THRESHOLD: u32 = INSTANCE_BUMP_AMOUNT - DAY_IN_LEDGERS;
+/// Persistent entries (balances) are bumped ~90 days ahead on each touch.
+const BALANCE_BUMP_AMOUNT: u32 = 90 * DAY_IN_LEDGERS;
+const BALANCE_LIFETIME_THRESHOLD: u32 = BALANCE_BUMP_AMOUNT - DAY_IN_LEDGERS;
+
+/// Extend the TTL of the instance storage (bond parameters).
+fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+}
+
+/// Extend the TTL of a persistent balance entry, if it exists.
+fn extend_balance_ttl(env: &Env, key: &DataKey) {
+    if env.storage().persistent().has(key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
 
@@ -120,6 +154,7 @@ impl GreenBondContract {
             .instance()
             .set(&DataKey::WhitelistContract, &whitelist_contract);
         env.storage().instance().set(&DataKey::Initialized, &true);
+        extend_instance_ttl(&env);
 
         env.events().publish(
             (Symbol::new(&env, "bond_initialized"),),
@@ -142,6 +177,7 @@ impl GreenBondContract {
         issuer.require_auth();
 
         assert!(amount > 0, "amount must be positive");
+        extend_instance_ttl(&env);
 
         // Enforce KYC whitelist
         Self::assert_whitelisted(&env, &to);
@@ -168,6 +204,7 @@ impl GreenBondContract {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &(current + amount));
+        extend_balance_ttl(&env, &DataKey::Balance(to.clone()));
         env.storage()
             .instance()
             .set(&DataKey::MintedSupply, &(minted + amount));
@@ -186,6 +223,7 @@ impl GreenBondContract {
         from.require_auth();
 
         assert!(amount > 0, "amount must be positive");
+        extend_instance_ttl(&env);
 
         // Enforce KYC whitelist for BOTH parties (sender and recipient)
         Self::assert_whitelisted(&env, &from);
@@ -210,6 +248,8 @@ impl GreenBondContract {
         env.storage()
             .persistent()
             .set(&DataKey::Balance(to.clone()), &(to_balance + amount));
+        extend_balance_ttl(&env, &DataKey::Balance(from.clone()));
+        extend_balance_ttl(&env, &DataKey::Balance(to.clone()));
 
         env.events()
             .publish((Symbol::new(&env, "transfer"),), (&from, &to, amount));
@@ -221,10 +261,9 @@ impl GreenBondContract {
 
     /// Returns the token balance of `owner`.
     pub fn balance(env: Env, owner: Address) -> i128 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Balance(owner))
-            .unwrap_or(0)
+        let key = DataKey::Balance(owner);
+        extend_balance_ttl(&env, &key);
+        env.storage().persistent().get(&key).unwrap_or(0)
     }
 
     /// Returns all immutable bond parameters.

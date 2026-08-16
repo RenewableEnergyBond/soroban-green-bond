@@ -32,6 +32,37 @@ pub enum DataKey {
 }
 
 // ---------------------------------------------------------------------------
+// Storage TTL (rent) management
+// ---------------------------------------------------------------------------
+//
+// Soroban storage is rented: entries are archived if nobody extends them.
+// Whitelist entries gate every bond transfer until the bond matures (2032),
+// so they must be bumped on every interaction to avoid being archived.
+
+/// ~1 day of ledgers at a 5-second close time.
+const DAY_IN_LEDGERS: u32 = 17_280;
+const INSTANCE_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
+const INSTANCE_LIFETIME_THRESHOLD: u32 = INSTANCE_BUMP_AMOUNT - DAY_IN_LEDGERS;
+const ENTRY_BUMP_AMOUNT: u32 = 90 * DAY_IN_LEDGERS;
+const ENTRY_LIFETIME_THRESHOLD: u32 = ENTRY_BUMP_AMOUNT - DAY_IN_LEDGERS;
+
+/// Extend the TTL of the instance storage (admin, count).
+fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+}
+
+/// Extend the TTL of a persistent whitelist entry, if it exists.
+fn extend_entry_ttl(env: &Env, key: &DataKey) {
+    if env.storage().persistent().has(key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, ENTRY_LIFETIME_THRESHOLD, ENTRY_BUMP_AMOUNT);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
 
@@ -59,6 +90,7 @@ impl KycWhitelistContract {
             .instance()
             .set(&DataKey::WhitelistCount, &0_u32);
         env.storage().instance().set(&DataKey::Initialized, &true);
+        extend_instance_ttl(&env);
 
         env.events()
             .publish((Symbol::new(&env, "wl_initialized"),), (&admin,));
@@ -88,6 +120,7 @@ impl KycWhitelistContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::Whitelisted(address.clone()), &true);
+            extend_entry_ttl(&env, &DataKey::Whitelisted(address.clone()));
 
             let count: u32 = env
                 .storage()
@@ -97,6 +130,7 @@ impl KycWhitelistContract {
             env.storage()
                 .instance()
                 .set(&DataKey::WhitelistCount, &(count + 1));
+            extend_instance_ttl(&env);
 
             env.events()
                 .publish((Symbol::new(&env, "wl_add"),), (&address,));
@@ -163,10 +197,9 @@ impl KycWhitelistContract {
     /// This is the function invoked cross-contract by the Green Bond on every
     /// `mint` and `transfer` call.
     pub fn is_wl(env: Env, address: Address) -> bool {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Whitelisted(address))
-            .unwrap_or(false)
+        let key = DataKey::Whitelisted(address);
+        extend_entry_ttl(&env, &key);
+        env.storage().persistent().get(&key).unwrap_or(false)
     }
 
     /// Returns the current admin address.
