@@ -186,7 +186,8 @@ impl GreenBondContract {
 
         assert!(amount > 0, "amount must be positive");
 
-        // Enforce KYC whitelist for recipient
+        // Enforce KYC whitelist for BOTH parties (sender and recipient)
+        Self::assert_whitelisted(&env, &from);
         Self::assert_whitelisted(&env, &to);
 
         let from_balance: i128 = env
