@@ -14,7 +14,7 @@ This repository contains the three Soroban smart contracts powering the Rebond g
 |---|---|
 | [`green-bond`](contracts/green-bond/) | Core security token — issuance, supply cap, maturity, coupon rate, transfer restrictions |
 | [`kyc-whitelist`](contracts/kyc-whitelist/) | On-chain KYC registry — only verified addresses can hold or receive bond tokens |
-| [`coupon-redemption`](contracts/coupon-redemption/) | Automated USDC coupon distribution and principal redemption at maturity |
+| [`coupon-redemption`](contracts/coupon-redemption/) | Funded Merkle coupon claims in USDC; principal redemption remains disabled |
 
 **Network:** Stellar (Soroban)  
 **Settlement:** USDC (native on Stellar)  
@@ -27,7 +27,7 @@ This repository contains the three Soroban smart contracts powering the Rebond g
 
 ## Testnet Deployments
 
-> Deployed on Stellar testnet — 10 June 2026  
+> Historical deployment on Stellar testnet — 10 June 2026. These IDs predate the SDK 29 upgrade, lifetime-supply fix, BondConfig initializer, and full SEP-41 interface; redeploy before resubmission.
 > Deployer: `GBX3MIAPKVCMK5BJB4FQTADGYMDW7OBOTZXAME3WR4VL4FMADWGTVZO2`
 
 | Contract | Contract ID | Stellar Expert |
@@ -63,8 +63,9 @@ This repository contains the three Soroban smart contracts powering the Rebond g
         │                        └── is_wl (called on every transfer)
         │
         ├── Soroban RPC ──► [Coupon & Redemption Contract]
-        │                        ├── pay_coupon (USDC → all holders)
-        │                        └── redeem (USDC → holder, burn tokens)
+        │                        ├── create_coupon (funded Merkle campaign)
+        │                        ├── claim_coupon (USDC → holder, once)
+        │                        └── redeem (disabled pending terms)
         │
         └── Horizon API ──► [Stellar Network]
                                  ├── Account management
@@ -86,23 +87,30 @@ This repository contains the three Soroban smart contracts powering the Rebond g
 The core security token contract. Parameters are immutably stored on-chain at issuance.
 
 ```rust
-// Initialize a bond
-initialize(issuer, total_supply, maturity_timestamp, coupon_rate_bps, isin, whitelist_contract)
+// Initialize once with immutable bond terms and token metadata
+initialize(BondConfig { issuer, total_supply, maturity_timestamp, coupon_rate_bps,
+                        isin, name, symbol, decimals, whitelist_contract })
 
 // Mint tokens to a whitelisted investor
 mint(to, amount)
 
-// Transfer tokens (both parties must be whitelisted)
-transfer(from, to, amount)
-
-// Read investor balance
+// SEP-41 metadata, balances, direct and delegated transfers/burns
+name() / symbol() / decimals()
 balance(owner) -> i128
+allowance(holder, spender) -> i128
+approve(holder, spender, amount, live_until_ledger)
+transfer(from, muxed_to, amount) // both addresses must be whitelisted
+transfer_from(spender, from, to, amount) // consumes allowance; KYC enforced
+burn(holder, amount)
+burn_from(spender, holder, amount) // consumes allowance
 
 // Read all bond parameters
 get_bond_info() -> BondInfo
 ```
 
-**Compliance:** every `mint` and `transfer` call performs a cross-contract check against the KYC Whitelist. Non-whitelisted addresses are rejected at the contract level.
+**Supply invariant:** `lifetime_issued_supply` never decreases and enforces the immutable cap; `minted_supply` is outstanding supply and decreases on burn. Burning can never restore issuance capacity.
+
+**Compliance:** mint and every direct/delegated transfer check both addresses against the KYC Whitelist. A holder can burn even after removal from the whitelist, so KYC expiry does not strand a redemption.
 
 ### KYC Whitelist Contract
 
@@ -128,20 +136,28 @@ transfer_admin(new_admin)
 whitelist_count() -> u32
 ```
 
-### Coupon & Redemption Contract *(Tranche 2 — in progress)*
+### Coupon & Redemption Contract *(Tranche 2 — claims implemented; redemption scaffold)*
 
-Handles automated USDC distribution to all bondholders.
+Coupon campaigns use per-holder Merkle claims, not an atomic payment to an admin-supplied holder list. `redeem` remains disabled until its contractual maturity and settlement rules are finalized.
 
 ```rust
 // Initialize with bond contract and USDC token addresses
 initialize(issuer, bond_contract, usdc_token)
 
-// Distribute coupon USDC to all whitelisted holders (atomic multi-recipient)
-pay_coupon(holder_addresses)
+// Register a funded campaign for a published record-ledger snapshot
+create_coupon(record_ledger, claim_deadline, merkle_root, total_amount)
 
-// Redeem principal USDC at maturity in exchange for bond tokens
+// Each holder claims once with an entitlement proof
+claim_coupon(campaign_id, holder, amount, proof)
+
+// Return unclaimed campaign remainder to issuer after claim deadline
+close_coupon(campaign_id)
+
+// Principal redemption remains disabled pending terms
 redeem(holder)
 ```
+
+Leaves are XDR-encoded `CouponLeaf { coupon_id, holder, amount }` values hashed as `SHA256(0x00 || leaf_xdr)`; internal nodes are `SHA256(0x01 || sorted(left, right))`. Proof depth is capped at 32. The issuer must publish the record-ledger export and reproducible Merkle root. Coupon period/rate calculation, per-holder rounding to USDC stroops, and treatment of delisted holders remain issuer-term decisions before production payouts.
 
 ---
 
@@ -150,12 +166,12 @@ redeem(holder)
 ### Prerequisites
 
 ```bash
-# Rust + wasm32 target
+# Rust + Soroban WASM target
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup target add wasm32-unknown-unknown
+rustup target add wasm32v1-none
 
-# Soroban CLI
-cargo install --locked soroban-cli
+# Stellar CLI v30.0.1+
+curl -fsSL https://github.com/stellar/stellar-cli/raw/main/install.sh | sh
 ```
 
 ### Run tests
@@ -167,15 +183,14 @@ cargo test --all --features testutils
 ### Build WASM
 
 ```bash
-cargo build --target wasm32-unknown-unknown --release \
-  -p green-bond -p kyc-whitelist -p coupon-redemption
+stellar contract build --locked
 ```
 
 ### Deploy to testnet
 
 ```bash
 # Fund a testnet account first
-soroban keys generate --network testnet deployer
+stellar keys generate --network testnet deployer
 
 # Then run the deploy script
 chmod +x scripts/deploy-testnet.sh
@@ -191,7 +206,7 @@ chmod +x scripts/deploy-testnet.sh
 | Green Bond Contract (core) | 🚧 In progress | Tranche 1 |
 | KYC Whitelist Contract | 🚧 In progress | Tranche 1 |
 | Backend Adapter (Node.js + Horizon + Soroban RPC) | 📋 Planned | Tranche 1 |
-| USDC Coupon Distribution (multi-recipient atomic) | 📋 Planned | Tranche 2 |
+| USDC Coupon Distribution (record-date snapshot + claim-based Merkle payouts) | 🚧 Initial contract implementation | Tranche 2 |
 | Investor Onboarding (Stellar Wallets Kit + DFNS) | 📋 Planned | Tranche 2 |
 | Investor Dashboard (rebond.eco/portfolio) | 📋 Planned | Tranche 2 |
 | Mainnet Deployment + Certora Audit | 📋 Planned | Tranche 3 |

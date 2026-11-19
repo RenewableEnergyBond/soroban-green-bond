@@ -95,9 +95,9 @@ graph TB
 | KYC/KYB Workflow | **Sumsub** (off-chain) | Live | — *(not funded by this grant)* |
 | **Stellar Adapter** | Node.js (Horizon + Soroban RPC) | Planned (Tranche 1) | ✅ |
 | **Stellar Wallets Kit** | JS wallet connector | Planned (Tranche 2) | ✅ (light) |
-| **Green Bond Contract** | Rust / Soroban SDK 22 | **Deployed on testnet** | ✅ |
-| **KYC Whitelist Contract** | Rust / Soroban SDK 22 | **Deployed on testnet** | ✅ |
-| **Coupon/Redemption Contract** | Rust / Soroban SDK 22 | **Deployed on testnet** (scaffold; full logic in Tranche 2) | ✅ |
+| **Green Bond Contract** | Rust / Soroban SDK 29.0.1 | **Redeploy required** | ✅ |
+| **KYC Whitelist Contract** | Rust / Soroban SDK 29.0.1 | **Redeploy required** | ✅ |
+| **Coupon/Redemption Contract** | Rust / Soroban SDK 29.0.1 | **Redeploy required** (Merkle claims implemented; redemption remains disabled) | ✅ |
 | **Investor Dashboard** | Vue.js | Planned (Tranche 2) | ✅ |
 | DFNS (MPC custody) | Stellar Integration List | Optional (Tranche 3) | ✅ (light, &lt;1 week) |
 | Allbridge (cross-chain USDC) | Stellar Integration List | Optional (Tranche 3) | ✅ (light, &lt;1 week) |
@@ -112,13 +112,19 @@ Core MiFID II security token. All bond parameters are immutably stored on-chain 
 
 | Function | Auth | Description |
 |---|---|---|
-| `initialize(issuer, total_supply, maturity_timestamp, coupon_rate_bps, isin, whitelist_contract)` | once | Stores bond terms; links the KYC whitelist contract |
+| `initialize(BondConfig)` | once | Stores immutable bond terms, SEP-41 metadata, and the whitelist contract |
 | `mint(to, amount)` | issuer | Issues tokens up to `total_supply` cap; recipient must be whitelisted |
-| `transfer(from, to, amount)` | holder | KYC-enforced transfer — **both** parties must be whitelisted |
-| `balance(owner)` | read | Token balance |
+| `transfer(from, muxed_to, amount)` | holder | SEP-41 transfer; **both** parties must be whitelisted |
+| `transfer_from(spender, from, to, amount)` | spender + allowance | SEP-41 delegated transfer; KYC-enforced |
+| `approve(from, spender, amount, live_until_ledger)` / `allowance(from, spender)` | holder / read | SEP-41 expiring allowance |
+| `burn(from, amount)` / `burn_from(spender, from, amount)` | holder / spender + allowance | Burns reduce outstanding supply, not lifetime issuance |
+| `balance(owner)`, `name()`, `symbol()`, `decimals()` | read | SEP-41 token interface |
+| `refresh_balance_ttl(owner)` | permissionless | Keeper refresh for a persistent balance; caller pays rent |
 | `get_bond_info()` | read | Full bond terms (issuer, supply, maturity, coupon, ISIN, whitelist) |
 
-**Compliance enforcement:** every `mint` and `transfer` performs a **cross-contract call** to the whitelist contract (`is_wl(address)`). A non-whitelisted address can never hold or receive tokens — compliance is a contract-level invariant, not a backend policy.
+**Supply invariant:** `lifetime_issued_supply` is monotonic and is the value checked against `total_supply`; `minted_supply` reports current outstanding supply. A burn cannot make issuance capacity available again.
+
+**Compliance enforcement:** mint and every transfer path perform a cross-contract call to `is_wl` for both source and destination. Burns remain available to delisted holders to avoid blocking contractual redemption.
 
 ### 3.2 KYC Whitelist Contract ([contracts/kyc-whitelist](contracts/kyc-whitelist))
 
@@ -131,16 +137,27 @@ On-chain registry of MiFID II-verified investor addresses. Fed by Rebond's off-c
 | `is_wl(address) → bool` | read | Called cross-contract by the Green Bond contract |
 | `transfer_admin(new_admin)` | admin | Admin rotation |
 | `whitelist_count()` | read | Number of verified addresses |
+| `refresh_entry_ttl(address)` | permissionless | Keeper refresh for a persistent whitelist entry |
 
 ### 3.3 Coupon/Redemption Contract ([contracts/coupon-redemption](contracts/coupon-redemption))
 
-Automates the bond lifecycle payments in **native USDC**. Deployed as a scaffold; full payout logic is Tranche 2 scope.
+The contract implements funded, per-holder Merkle coupon claims; it does not process a complete holder list in one transaction. The legacy `pay_coupon` entry point remains disabled. `redeem` also remains disabled until its contractual maturity and settlement rules are finalized.
+
+**Coupon flow:** issuer registers a funded campaign with a record ledger, claim deadline, total funding, and a Merkle root over `(coupon_id, holder, amount)` entitlements. Each holder claims individually with a proof. The contract checks USDC available beyond existing reservations, enforces one claim per holder/campaign, caps proofs at 32 nodes, sends USDC, and returns unclaimed funds to the issuer after the deadline. No holder enumeration or batch payout is performed.
+
+**Merkle encoding:** `leaf = SHA256(0x00 || XDR(CouponLeaf { coupon_id, holder, amount }))`; `node = SHA256(0x01 || min(left, right) || max(left, right))`, where child hashes are compared lexicographically as 32-byte values. Publish the exact record-ledger export and a reproducible root-generation tool with each campaign.
+
+**Snapshot and rounding policy to implement:** snapshot balances at the exact record ledger; calculate each holder's entitlement using the agreed coupon-period convention; round down to USDC stroops per holder; leave rounding dust unclaimed for issuer reconciliation after the claim window. Fix these business terms before enabling payouts.
 
 | Function | Auth | Description |
 |---|---|---|
 | `initialize(issuer, bond_contract, usdc_token)` | once | Links bond contract and USDC asset |
-| `pay_coupon(holders)` | issuer | Pro-rata USDC coupon distribution to all whitelisted holders (Tranche 2) |
-| `redeem(holder)` | issuer | Principal redemption at maturity in USDC (Tranche 2) |
+| `create_coupon(record_ledger, claim_deadline, merkle_root, total_amount)` | issuer | Registers a fully funded campaign and reserves its USDC |
+| `claim_coupon(coupon_id, holder, amount, proof)` | holder | Verifies entitlement and pays USDC once; proof depth max 32 |
+| `close_coupon(coupon_id)` | issuer after deadline | Returns the unclaimed campaign remainder |
+| `get_coupon(coupon_id)` / `reserved_usdc()` | read | Campaign and reserved-funds views |
+| `refresh_ttl()` | permissionless | Keeper refresh for instance storage |
+| `pay_coupon(...)` / `redeem(holder)` | disabled | Remain inactive; redemption design is still Tranche 2 |
 
 ---
 
@@ -167,23 +184,22 @@ sequenceDiagram
     GB-->>B: minted (event emitted)
 ```
 
-### 4.2 Coupon payment (Tranche 2)
+### 4.2 Coupon claims (initial implementation; Tranche 2)
 
 ```mermaid
 sequenceDiagram
     participant I as Issuer
     participant B as Backend + Stellar Adapter
     participant CR as Coupon Contract
-    participant GB as Green Bond Contract
     participant U as USDC
 
-    I->>B: Trigger coupon date
-    B->>CR: pay_coupon(holders)
-    loop each holder
-        CR->>GB: balance(holder)
-        CR->>U: transfer(issuer → holder, pro-rata USDC)
-    end
-    CR-->>B: coupon_paid event (indexed, auditable)
+    I->>B: Publish record-ledger snapshot and fund campaign
+    B->>CR: create_coupon(record_ledger, deadline, root, total)
+    INVESTOR->>B: Submit campaign claim + Merkle proof
+    B->>CR: claim_coupon(campaign, holder, amount, proof)
+    CR->>CR: Verify proof + reject duplicate claim
+    CR->>U: Transfer USDC to holder
+    CR-->>B: coupon_claimed event
 ```
 
 ### 4.3 Investor view
@@ -198,12 +214,12 @@ Investor dashboard (rebond.eco/portfolio) reads **directly from the chain** (Sor
 
 | Stellar component | Usage | Tranche |
 |---|---|---|
-| **Soroban smart contracts** (Rust, SDK 22) | 3 contracts: security token, compliance registry, lifecycle payments | T1–T2 |
+| **Soroban smart contracts** (Rust, SDK 29.0.1; Stellar CLI 30.0.1) | 3 contracts: security token, compliance registry, lifecycle payments | T1–T2 |
 | **Native USDC** (Circle) | Coupon and principal settlement — replaces paying-agent banking rails | T2–T3 |
 | **Soroban RPC** | Contract deployment, invocations, read-only simulations (dashboard) | T1–T3 |
 | **Horizon API** | Account management, USDC payment submission, transaction history | T1–T3 |
 | **Stellar Wallets Kit** | Investor wallet connection on the dashboard (multi-wallet: Freighter, Albedo, LOBSTR, xBull) | T2 |
-| **Events + indexing** | All state changes emit events (`bond_initialized`, `wl_initialized`, `coupon_paid`, …) for audit trail and explorer visibility | T1–T3 |
+| **Events + indexing** | State changes emit indexed events (`bond_initialized`, `wl_initialized`, `coupon_claimed`, …) for audit trail and explorer visibility | T1–T3 |
 
 ### 5.2 Stellar Integration List components
 
@@ -223,17 +239,34 @@ Items from the official Stellar Integration List that Rebond integrates or plans
 
 - **On-chain enforcement:** transfer restrictions live in the contract, not the backend. The whitelist invariant holds even if Rebond's platform is offline or compromised.
 - **Role separation:** issuer (mint, coupon triggers), whitelist admin (KYC registry), holders (transfers). Admin rotation supported.
-- **Supply cap:** `total_supply` immutable after initialization; `mint` enforces the cap (overflow-checked arithmetic, `overflow-checks = true` in release profile).
+- **Supply cap:** `total_supply` immutable after initialization; lifetime issued supply is monotonic, while outstanding supply decreases on burn.
+- **SEP-41:** Green Bond implements the SDK `TokenInterface`, including expiring allowances and delegated transfer/burn. Allowances are capped at Soroban's maximum persistent-entry TTL.
+- **Stellar-specific threat model:** document issuer/admin compromise, KYC registry errors, allowance misuse, coupon-root integrity, USDC funding/issuer risk, storage expiry, cross-contract authorization, and deployment/recovery procedures before audit.
 - **Auditability:** every lifecycle action emits an event; full history reconstructable from chain data alone.
 - **Audit plan:** external audit of all three contracts before mainnet (Tranche 3 gate), via Stellar LaunchKit — **not funded by this grant**.
 - **KYC/KYB vendor:** Sumsub (identity verification, AML, KYB) — part of Rebond platform OPEX, **not funded by this grant**.
-- **CI:** every push runs the full test suite (15 unit tests), `clippy --all-targets -D warnings`, `rustfmt`, and a release WASM build ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
+- **CI:** every push runs the full test suite (43 unit tests), `clippy --all-targets -D warnings`, `rustfmt`, and `stellar contract build --locked` using Stellar CLI 30.0.1 ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
+
+### 6.1 Soroban Threat Model (Initial)
+
+| Threat | Current controls | Residual risk / required operation |
+|---|---|---|
+| Issuer key compromise | Mint requires issuer auth and the lifetime cap is immutable; coupon campaign creation is issuer-only and requires prefunded USDC. | Compromised issuer can still issue the remaining allocation and register a dishonest root. Use multisig custody, approval controls, and issuance monitoring. |
+| Whitelist admin compromise or KYC error | Every mint and transfer checks the on-chain whitelist; removal immediately blocks transfers. | Admin can admit an ineligible address. Protect the admin with multisig and dual-control KYC operations. |
+| Holder key compromise / allowance misuse | `approve` requires holder auth, sets a finite amount and expiry; transfer/burn delegation consumes allowance. | Wallet UX must show spender, amount, and expiry and support revocation. |
+| Coupon entitlement/root error | Campaign registration checks unreserved USDC; claims verify domain-separated SHA-256 proofs, enforce one claim per holder, and update state atomically with transfer. | Merkle proofs establish inclusion, not correctness of the off-chain snapshot. Publish the record-ledger export and reproducible root calculation; independent review remains necessary. |
+| USDC funding or issuer failure | Campaign creation checks available balance beyond existing reservations; each claim is atomic and unclaimed funds can be returned after the deadline. | Native USDC issuer, freeze, liquidity, and legal settlement risks remain external dependencies. Principal redemption is still disabled. |
+| Persistent storage archival | Read/write calls refresh instance, balance, whitelist, campaign, and allowance TTLs; permissionless refresh endpoints support keepers. | There is no on-chain scheduler or complete holder enumeration; an operational keeper must refresh inactive balances before their TTL expires. Test and fund this process before mainnet. |
+| Cross-contract call / authorization errors | Issuer and holder authorization is enforced in-contract; transfer checks the configured whitelist. Soroban transactions roll back atomically on failure. | Verify contract IDs and generated specs at deployment; coupon-to-token authorization still requires end-to-end testing. |
+| ABI or WASM mismatch at deployment | CI runs the SDK-supported Stellar CLI build and tests. | The published testnet IDs use the previous ABI and do not have these fixes. Redeploy and verify IDs/specs before resubmission. |
+
+This is an engineering threat model, not an external audit. Independent review of the snapshot/root generator and an operational keeper remain release gates.
 
 ---
 
 ## 7. Testnet Deployments
 
-Deployed and initialized on Stellar testnet, **10 June 2026** (deployer `GBX3MIAPKVCMK5BJB4FQTADGYMDW7OBOTZXAME3WR4VL4FMADWGTVZO2`):
+Historical deployment initialized on Stellar testnet, **10 June 2026** (deployer `GBX3MIAPKVCMK5BJB4FQTADGYMDW7OBOTZXAME3WR4VL4FMADWGTVZO2`). These IDs use the previous ABI and do not contain the lifetime issuance invariant or SEP-41 allowances; redeploy before resubmission:
 
 | Contract | Contract ID |
 |---|---|
@@ -262,5 +295,5 @@ Quantified success targets for the mainnet tranche (verifiable on Stellar Expert
 | First live issuance (TVL on the bond contract) | **≥ €1,000,000** (LANGA International pilot) |
 | Qualified investor wallets onboarded on mainnet | **≥ 3** (via Stellar Wallets Kit / DFNS) |
 | On-chain settlement transactions (issuance + first coupon cycle) | **≥ 10** |
-| Coupon distribution | **1 full multi-recipient USDC coupon** executed on mainnet |
+| Coupon distribution | **1 funded Merkle coupon campaign fully claimed on-chain** |
 | Contracts open-sourced (MIT) | **3 / 3** (Green Bond, KYC Whitelist, Coupon/Redemption) |
