@@ -10,8 +10,11 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, token::TokenClient, xdr::ToXdr, Address,
-    Bytes, BytesN, Env, MuxedAddress, Vec,
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contractevent, contractimpl, contracttype,
+    token::TokenClient,
+    xdr::ToXdr,
+    Address, Bytes, BytesN, Env, IntoVal, MuxedAddress, Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -25,12 +28,12 @@ pub enum DataKey {
     Issuer,
     /// Address of the Green Bond contract
     BondContract,
-    /// Address of the USDC token contract on Stellar
-    UsdcToken,
+    /// Address of the settlement token's Stellar Asset Contract
+    SettlementToken,
     /// Next coupon campaign identifier
     NextCouponId,
-    /// USDC reserved for unclaimed coupon entitlements
-    ReservedUsdc,
+    /// Settlement tokens reserved for unclaimed coupon entitlements
+    ReservedSettlementAmount,
     /// Coupon campaign stored by identifier
     Coupon(u32),
     /// Duplicate-claim guard by campaign and holder
@@ -47,11 +50,23 @@ pub enum DataKey {
 #[derive(Clone)]
 pub struct CouponCampaign {
     pub record_ledger: u32,
+    pub period_start_timestamp: u64,
+    pub period_end_timestamp: u64,
+    pub annual_rate_bps: u32,
+    pub periods_per_year: u32,
     pub claim_deadline: u32,
     pub merkle_root: BytesN<32>,
     pub total_amount: i128,
     pub claimed_amount: i128,
     pub closed: bool,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct BondCouponTerms {
+    pub annual_rate_bps: u32,
+    pub periods_per_year: u32,
+    pub settlement_asset: Address,
 }
 
 #[contracttype]
@@ -73,6 +88,10 @@ pub struct CouponCreated {
     #[topic]
     pub coupon_id: u32,
     pub record_ledger: u32,
+    pub period_start_timestamp: u64,
+    pub period_end_timestamp: u64,
+    pub annual_rate_bps: u32,
+    pub periods_per_year: u32,
     pub claim_deadline: u32,
     pub total_amount: i128,
     pub merkle_root: BytesN<32>,
@@ -120,23 +139,38 @@ impl CouponRedemptionContract {
     /// # Arguments
     /// * `issuer`        – Address authorised to trigger payouts.
     /// * `bond_contract` – Address of the Soroban Green Bond contract.
-    /// * `usdc_token`    – Address of the USDC token contract on Stellar mainnet.
-    pub fn initialize(env: Env, issuer: Address, bond_contract: Address, usdc_token: Address) {
+    /// * `settlement_asset` – Stellar Asset Contract address for the bond's currency.
+    pub fn initialize(
+        env: Env,
+        issuer: Address,
+        bond_contract: Address,
+        settlement_asset: Address,
+    ) {
         if env.storage().instance().has(&DataKey::Initialized) {
             panic!("already initialized");
         }
         issuer.require_auth();
+        let terms: BondCouponTerms = env.invoke_contract(
+            &bond_contract,
+            &Symbol::new(&env, "get_coupon_terms"),
+            Vec::new(&env),
+        );
+        assert!(
+            terms.settlement_asset == settlement_asset,
+            "settlement asset does not match bond"
+        );
+        TokenClient::new(&env, &settlement_asset).balance(&env.current_contract_address());
         env.storage().instance().set(&DataKey::Issuer, &issuer);
         env.storage()
             .instance()
             .set(&DataKey::BondContract, &bond_contract);
         env.storage()
             .instance()
-            .set(&DataKey::UsdcToken, &usdc_token);
+            .set(&DataKey::SettlementToken, &settlement_asset);
         env.storage().instance().set(&DataKey::NextCouponId, &0_u32);
         env.storage()
             .instance()
-            .set(&DataKey::ReservedUsdc, &0_i128);
+            .set(&DataKey::ReservedSettlementAmount, &0_i128);
         env.storage().instance().set(&DataKey::Initialized, &true);
         extend_instance_ttl(&env);
 
@@ -151,11 +185,13 @@ impl CouponRedemptionContract {
     // Coupon payments
     // -----------------------------------------------------------------------
 
-    /// Register a funded claim campaign for a published record-ledger snapshot.
-    /// The Merkle root commits to (coupon_id, holder, amount) leaves.
+    /// Register a funded claim campaign for a record-ledger snapshot and coupon period.
+    /// Amounts are calculated off-chain using the bond terms and Actual/365 Fixed.
     pub fn create_coupon(
         env: Env,
         record_ledger: u32,
+        period_start_timestamp: u64,
+        period_end_timestamp: u64,
         claim_deadline: u32,
         merkle_root: BytesN<32>,
         total_amount: i128,
@@ -174,6 +210,14 @@ impl CouponRedemptionContract {
             "record ledger is in the future"
         );
         assert!(
+            period_start_timestamp < period_end_timestamp,
+            "coupon period is empty"
+        );
+        assert!(
+            period_end_timestamp <= env.ledger().timestamp(),
+            "coupon period ends in the future"
+        );
+        assert!(
             claim_deadline > current_ledger,
             "claim deadline must be in the future"
         );
@@ -190,18 +234,29 @@ impl CouponRedemptionContract {
         let reserved: i128 = env
             .storage()
             .instance()
-            .get(&DataKey::ReservedUsdc)
+            .get(&DataKey::ReservedSettlementAmount)
             .unwrap_or(0);
-        let usdc_token: Address = env
+        let settlement_token: Address = env
             .storage()
             .instance()
-            .get(&DataKey::UsdcToken)
+            .get(&DataKey::SettlementToken)
             .expect("not initialized");
-        let token = TokenClient::new(&env, &usdc_token);
+        let token = TokenClient::new(&env, &settlement_token);
         let contract_address = env.current_contract_address();
+        let new_reserved = reserved
+            .checked_add(total_amount)
+            .expect("reserved settlement amount overflow");
         assert!(
-            token.balance(&contract_address) >= reserved + total_amount,
-            "insufficient USDC funding"
+            token.balance(&contract_address) >= new_reserved,
+            "insufficient settlement funding"
+        );
+        let terms: BondCouponTerms = env.invoke_contract(
+            &env.storage()
+                .instance()
+                .get(&DataKey::BondContract)
+                .expect("not initialized"),
+            &Symbol::new(&env, "get_coupon_terms"),
+            Vec::new(&env),
         );
 
         let key = DataKey::Coupon(coupon_id);
@@ -209,6 +264,10 @@ impl CouponRedemptionContract {
             &key,
             &CouponCampaign {
                 record_ledger,
+                period_start_timestamp,
+                period_end_timestamp,
+                annual_rate_bps: terms.annual_rate_bps,
+                periods_per_year: terms.periods_per_year,
                 claim_deadline,
                 merkle_root: merkle_root.clone(),
                 total_amount,
@@ -217,20 +276,22 @@ impl CouponRedemptionContract {
             },
         );
         extend_campaign_ttl(&env, &key);
+        env.storage().instance().set(
+            &DataKey::NextCouponId,
+            &coupon_id.checked_add(1).expect("coupon ID overflow"),
+        );
         env.storage()
             .instance()
-            .set(&DataKey::NextCouponId, &(coupon_id + 1));
-        let new_reserved = reserved
-            .checked_add(total_amount)
-            .expect("reserved USDC overflow");
-        env.storage()
-            .instance()
-            .set(&DataKey::ReservedUsdc, &new_reserved);
+            .set(&DataKey::ReservedSettlementAmount, &new_reserved);
         extend_instance_ttl(&env);
 
         CouponCreated {
             coupon_id,
             record_ledger,
+            period_start_timestamp,
+            period_end_timestamp,
+            annual_rate_bps: terms.annual_rate_bps,
+            periods_per_year: terms.periods_per_year,
             claim_deadline,
             total_amount,
             merkle_root,
@@ -302,22 +363,23 @@ impl CouponRedemptionContract {
         let reserved: i128 = env
             .storage()
             .instance()
-            .get(&DataKey::ReservedUsdc)
+            .get(&DataKey::ReservedSettlementAmount)
             .unwrap_or(0);
         let new_reserved = reserved
             .checked_sub(amount)
-            .expect("reserved USDC underflow");
+            .expect("reserved settlement amount underflow");
         env.storage()
             .instance()
-            .set(&DataKey::ReservedUsdc, &new_reserved);
+            .set(&DataKey::ReservedSettlementAmount, &new_reserved);
         extend_instance_ttl(&env);
 
-        let usdc_token: Address = env
+        let settlement_token: Address = env
             .storage()
             .instance()
-            .get(&DataKey::UsdcToken)
+            .get(&DataKey::SettlementToken)
             .expect("not initialized");
-        TokenClient::new(&env, &usdc_token).transfer(
+        authorize_settlement_transfer(&env, &settlement_token, &holder, amount);
+        TokenClient::new(&env, &settlement_token).transfer(
             &env.current_contract_address(),
             MuxedAddress::from(holder.clone()),
             &amount,
@@ -360,23 +422,24 @@ impl CouponRedemptionContract {
         let reserved: i128 = env
             .storage()
             .instance()
-            .get(&DataKey::ReservedUsdc)
+            .get(&DataKey::ReservedSettlementAmount)
             .unwrap_or(0);
         env.storage().instance().set(
-            &DataKey::ReservedUsdc,
+            &DataKey::ReservedSettlementAmount,
             &reserved
                 .checked_sub(refund_amount)
-                .expect("reserved USDC underflow"),
+                .expect("reserved settlement amount underflow"),
         );
         extend_instance_ttl(&env);
 
         if refund_amount > 0 {
-            let usdc_token: Address = env
+            let settlement_token: Address = env
                 .storage()
                 .instance()
-                .get(&DataKey::UsdcToken)
+                .get(&DataKey::SettlementToken)
                 .expect("not initialized");
-            TokenClient::new(&env, &usdc_token).transfer(
+            authorize_settlement_transfer(&env, &settlement_token, &issuer, refund_amount);
+            TokenClient::new(&env, &settlement_token).transfer(
                 &env.current_contract_address(),
                 MuxedAddress::from(issuer),
                 &refund_amount,
@@ -419,12 +482,12 @@ impl CouponRedemptionContract {
             .expect("not initialized")
     }
 
-    /// Returns the USDC token contract address.
-    pub fn get_usdc_token(env: Env) -> Address {
+    /// Returns the bond's settlement token SAC address.
+    pub fn get_settlement_asset(env: Env) -> Address {
         extend_instance_ttl(&env);
         env.storage()
             .instance()
-            .get(&DataKey::UsdcToken)
+            .get(&DataKey::SettlementToken)
             .expect("not initialized")
     }
 
@@ -440,11 +503,19 @@ impl CouponRedemptionContract {
         campaign
     }
 
-    pub fn reserved_usdc(env: Env) -> i128 {
+    pub fn reserved_settlement_amount(env: Env) -> i128 {
         extend_instance_ttl(&env);
         env.storage()
             .instance()
-            .get(&DataKey::ReservedUsdc)
+            .get(&DataKey::ReservedSettlementAmount)
+            .unwrap_or(0)
+    }
+
+    pub fn next_coupon_id(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::NextCouponId)
             .unwrap_or(0)
     }
 
@@ -468,14 +539,36 @@ fn extend_campaign_ttl(env: &Env, key: &DataKey) {
     }
 }
 
-fn hash_leaf(env: &Env, leaf: &CouponLeaf) -> BytesN<32> {
+fn authorize_settlement_transfer(env: &Env, token: &Address, to: &Address, amount: i128) {
+    let contract_address = env.current_contract_address();
+    env.authorize_as_current_contract(Vec::from_array(
+        env,
+        [InvokerContractAuthEntry::Contract(SubContractInvocation {
+            context: ContractContext {
+                contract: token.clone(),
+                fn_name: Symbol::new(env, "transfer"),
+                args: Vec::from_array(
+                    env,
+                    [
+                        contract_address.into_val(env),
+                        MuxedAddress::from(to.clone()).into_val(env),
+                        amount.into_val(env),
+                    ],
+                ),
+            },
+            sub_invocations: Vec::new(env),
+        })],
+    ));
+}
+
+pub fn hash_leaf(env: &Env, leaf: &CouponLeaf) -> BytesN<32> {
     let mut preimage = Bytes::new(env);
     preimage.push_back(0);
     preimage.append(&leaf.clone().to_xdr(env));
     env.crypto().sha256(&preimage).into()
 }
 
-fn hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
+pub fn hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
     let left = left.to_array();
     let right = right.to_array();
     let (first, second) = if left <= right {
