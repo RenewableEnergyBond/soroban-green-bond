@@ -14,10 +14,10 @@ This repository contains the three Soroban smart contracts powering the Rebond g
 |---|---|
 | [`green-bond`](contracts/green-bond/) | Core security token — issuance, supply cap, maturity, coupon rate, transfer restrictions |
 | [`kyc-whitelist`](contracts/kyc-whitelist/) | On-chain KYC registry — only verified addresses can hold or receive bond tokens |
-| [`coupon-redemption`](contracts/coupon-redemption/) | Funded Merkle coupon claims in USDC; principal redemption remains disabled |
+| [`coupon-redemption`](contracts/coupon-redemption/) | Funded Merkle coupon claims in the bond's settlement asset; principal redemption remains disabled |
 
 **Network:** Stellar (Soroban)  
-**Settlement:** USDC (native on Stellar)  
+**Settlement:** same asset as the bond (EURC SAC for euro-denominated PoC bonds)
 **Regulatory framework:** MiFID II security tokens, placement privé Art. L.411-2 CMF (France)  
 **License:** MIT
 
@@ -64,18 +64,18 @@ This repository contains the three Soroban smart contracts powering the Rebond g
         │
         ├── Soroban RPC ──► [Coupon & Redemption Contract]
         │                        ├── create_coupon (funded Merkle campaign)
-        │                        ├── claim_coupon (USDC → holder, once)
+        │                        ├── claim_coupon (settlement asset → holder, once)
         │                        └── redeem (disabled pending terms)
         │
         └── Horizon API ──► [Stellar Network]
                                  ├── Account management
-                                 ├── USDC transfers
+                                 ├── settlement-asset transfers through the SAC
                                  └── Event stream → investor dashboard
 
 [Investor] ──► Stellar Wallet (Freighter / Albedo / LOBSTR)
                ──► holds bond tokens
-               ──► receives USDC coupons quarterly
-               ──► receives USDC principal at maturity
+               ──► claims settlement-asset coupons
+               ──► principal redemption at maturity (disabled in this PoC)
 ```
 
 ---
@@ -89,7 +89,8 @@ The core security token contract. Parameters are immutably stored on-chain at is
 ```rust
 // Initialize once with immutable bond terms and token metadata
 initialize(BondConfig { issuer, total_supply, maturity_timestamp, coupon_rate_bps,
-                        isin, name, symbol, decimals, whitelist_contract })
+                        coupon_periods_per_year, settlement_asset, isin, name,
+                        symbol, decimals, whitelist_contract })
 
 // Mint tokens to a whitelisted investor
 mint(to, amount)
@@ -136,16 +137,16 @@ transfer_admin(new_admin)
 whitelist_count() -> u32
 ```
 
-### Coupon & Redemption Contract *(Tranche 2 — claims implemented; redemption scaffold)*
+### Coupon & Redemption Contract *(Merkle claims implemented; redemption scaffold)*
 
-Coupon campaigns use per-holder Merkle claims, not an atomic payment to an admin-supplied holder list. `redeem` remains disabled until its contractual maturity and settlement rules are finalized.
+Coupon campaigns use per-holder Merkle claims, not an atomic payment to an admin-supplied holder list. The coupon contract reads the immutable annual rate, periods per year, and settlement SAC from the linked bond and rejects a different asset. `redeem` remains disabled until its contractual maturity and settlement rules are finalized.
 
 ```rust
-// Initialize with bond contract and USDC token addresses
-initialize(issuer, bond_contract, usdc_token)
+// Initialize with the bond contract and its verified settlement SAC
+initialize(issuer, bond_contract, settlement_sac)
 
-// Register a funded campaign for a published record-ledger snapshot
-create_coupon(record_ledger, claim_deadline, merkle_root, total_amount)
+// Register a funded campaign for a published record-ledger snapshot and coupon period
+create_coupon(record_ledger, period_start, period_end, claim_deadline, merkle_root, total_amount)
 
 // Each holder claims once with an entitlement proof
 claim_coupon(campaign_id, holder, amount, proof)
@@ -157,7 +158,18 @@ close_coupon(campaign_id)
 redeem(holder)
 ```
 
-Leaves are XDR-encoded `CouponLeaf { coupon_id, holder, amount }` values hashed as `SHA256(0x00 || leaf_xdr)`; internal nodes are `SHA256(0x01 || sorted(left, right))`. Proof depth is capped at 32. The issuer must publish the record-ledger export and reproducible Merkle root. Coupon period/rate calculation, per-holder rounding to USDC stroops, and treatment of delisted holders remain issuer-term decisions before production payouts.
+Leaves are XDR-encoded `CouponLeaf { coupon_id, holder, amount }` values hashed as `SHA256(0x00 || leaf_xdr)`; internal nodes are `SHA256(0x01 || sorted(left, right))`. Proof depth is capped at 32. The issuer publishes the record-ledger export and reproducible Merkle root. Coupon amounts use Actual/365 Fixed and round down to the settlement asset's smallest unit; the aggregate rounding remainder is excluded from claims and remains with the issuer. Delisted holders with a positive balance at the record ledger remain eligible. The bounded claim period and issuer return of unclaimed amounts are PoC policies. See [ADR 0001](docs/adr/0001-coupon-settlement-and-snapshot.md).
+
+Generate the campaign artifact from normalized, ordered Soroban events (JSONL) and the outstanding supply captured on-chain at the record ledger:
+
+```bash
+cargo run -p coupon-redemption --features coupon-tools --bin coupon-snapshot -- \
+        --events events.jsonl --record-ledger 12345 --expected-outstanding 1000000 \
+        --coupon-id 0 --period-start 1792224000 --period-end 1800000000 \
+        --annual-rate-bps 500 --periods-per-year 4 --bond-decimals 0 \
+        --settlement-asset <VERIFIED_EURC_SAC_ID> --settlement-decimals 7 \
+        --output coupon-0.json
+```
 
 ---
 
@@ -178,6 +190,7 @@ curl -fsSL https://github.com/stellar/stellar-cli/raw/main/install.sh | sh
 
 ```bash
 cargo test --all --features testutils
+cargo test -p coupon-redemption --features coupon-tools
 ```
 
 ### Build WASM
@@ -206,7 +219,7 @@ chmod +x scripts/deploy-testnet.sh
 | Green Bond Contract (core) | 🚧 In progress | Tranche 1 |
 | KYC Whitelist Contract | 🚧 In progress | Tranche 1 |
 | Backend Adapter (Node.js + Horizon + Soroban RPC) | 📋 Planned | Tranche 1 |
-| USDC Coupon Distribution (record-date snapshot + claim-based Merkle payouts) | 🚧 Initial contract implementation | Tranche 2 |
+| Bond-currency coupon claims (record-date snapshot + Merkle proofs) | 🚧 Initial contract implementation | Tranche 2 |
 | Investor Onboarding (Stellar Wallets Kit + DFNS) | 📋 Planned | Tranche 2 |
 | Investor Dashboard (rebond.eco/portfolio) | 📋 Planned | Tranche 2 |
 | Mainnet Deployment + Certora Audit | 📋 Planned | Tranche 3 |
