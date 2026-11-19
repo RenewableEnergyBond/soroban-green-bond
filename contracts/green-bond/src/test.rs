@@ -27,6 +27,8 @@ fn init_bond(env: &Env, bond: &GreenBondContractClient, issuer: &Address, whitel
         total_supply: 1_000_000_i128,
         maturity_timestamp: 1_900_000_000_u64,
         coupon_rate_bps: 500_u32,
+        coupon_periods_per_year: 4_u32,
+        settlement_asset: Address::generate(env),
         isin: String::from_str(env, "FRRBD00001"),
         name: String::from_str(env, "Rebond Green Bond 2032"),
         symbol: String::from_str(env, "RGB32"),
@@ -59,6 +61,7 @@ fn test_initialize_stores_bond_info() {
     assert_eq!(info.lifetime_issued_supply, 0);
     assert_eq!(info.maturity_timestamp, 1_900_000_000);
     assert_eq!(info.coupon_rate_bps, 500);
+    assert_eq!(info.coupon_periods_per_year, 4);
 }
 
 #[test]
@@ -91,6 +94,8 @@ fn test_initialize_requires_issuer_auth() {
         total_supply: 1_000_i128,
         maturity_timestamp: 1_900_000_000_u64,
         coupon_rate_bps: 500_u32,
+        coupon_periods_per_year: 4_u32,
+        settlement_asset: Address::generate(&env),
         isin: String::from_str(&env, "FRRBD00001"),
         name: String::from_str(&env, "Rebond Green Bond 2032"),
         symbol: String::from_str(&env, "RGB32"),
@@ -286,6 +291,8 @@ fn test_burn_does_not_restore_lifetime_issuance_capacity() {
         total_supply: 1_000_i128,
         maturity_timestamp: 1_900_000_000_u64,
         coupon_rate_bps: 500_u32,
+        coupon_periods_per_year: 4_u32,
+        settlement_asset: Address::generate(&env),
         isin: String::from_str(&env, "FRRBD00001"),
         name: String::from_str(&env, "Rebond Green Bond 2032"),
         symbol: String::from_str(&env, "RGB32"),

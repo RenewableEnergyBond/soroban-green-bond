@@ -36,6 +36,10 @@ pub enum DataKey {
     MaturityTimestamp,
     /// Annual coupon rate in basis points (e.g. 500 = 5.00 %)
     CouponRateBps,
+    /// Coupon periods per year: 1, 2, or 4
+    CouponPeriodsPerYear,
+    /// SAC address for the bond's settlement currency
+    SettlementAsset,
     /// ISIN-equivalent identifier stored as a Symbol
     Isin,
     /// Human-readable token name (SEP-41 metadata)
@@ -69,6 +73,8 @@ pub struct BondInfo {
     pub lifetime_issued_supply: i128,
     pub maturity_timestamp: u64,
     pub coupon_rate_bps: u32,
+    pub coupon_periods_per_year: u32,
+    pub settlement_asset: Address,
     pub isin: String,
     pub whitelist_contract: Address,
 }
@@ -80,11 +86,21 @@ pub struct BondConfig {
     pub total_supply: i128,
     pub maturity_timestamp: u64,
     pub coupon_rate_bps: u32,
+    pub coupon_periods_per_year: u32,
+    pub settlement_asset: Address,
     pub isin: String,
     pub name: String,
     pub symbol: String,
     pub decimals: u32,
     pub whitelist_contract: Address,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct CouponTerms {
+    pub annual_rate_bps: u32,
+    pub periods_per_year: u32,
+    pub settlement_asset: Address,
 }
 
 #[contracttype]
@@ -100,6 +116,8 @@ pub struct BondInitialized {
     pub total_supply: i128,
     pub maturity_timestamp: u64,
     pub coupon_rate_bps: u32,
+    pub coupon_periods_per_year: u32,
+    pub settlement_asset: Address,
 }
 
 #[contractevent(data_format = "single-value")]
@@ -203,6 +221,8 @@ impl GreenBondContract {
             total_supply,
             maturity_timestamp,
             coupon_rate_bps,
+            coupon_periods_per_year,
+            settlement_asset,
             isin,
             name,
             symbol,
@@ -217,6 +237,12 @@ impl GreenBondContract {
         assert!(
             coupon_rate_bps <= 10_000,
             "coupon_rate_bps must be <= 10000"
+        );
+        assert!(
+            coupon_periods_per_year == 1
+                || coupon_periods_per_year == 2
+                || coupon_periods_per_year == 4,
+            "coupon periods per year must be 1, 2, or 4"
         );
 
         env.storage().instance().set(&DataKey::Issuer, &issuer);
@@ -235,6 +261,12 @@ impl GreenBondContract {
         env.storage()
             .instance()
             .set(&DataKey::CouponRateBps, &coupon_rate_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::CouponPeriodsPerYear, &coupon_periods_per_year);
+        env.storage()
+            .instance()
+            .set(&DataKey::SettlementAsset, &settlement_asset);
         env.storage().instance().set(&DataKey::Isin, &isin);
         env.storage().instance().set(&DataKey::Name, &name);
         env.storage().instance().set(&DataKey::TokenSymbol, &symbol);
@@ -250,6 +282,8 @@ impl GreenBondContract {
             total_supply,
             maturity_timestamp,
             coupon_rate_bps,
+            coupon_periods_per_year,
+            settlement_asset,
         }
         .publish(&env);
     }
@@ -361,6 +395,16 @@ impl GreenBondContract {
                 .instance()
                 .get(&DataKey::CouponRateBps)
                 .expect("not initialized"),
+            coupon_periods_per_year: env
+                .storage()
+                .instance()
+                .get(&DataKey::CouponPeriodsPerYear)
+                .expect("not initialized"),
+            settlement_asset: env
+                .storage()
+                .instance()
+                .get(&DataKey::SettlementAsset)
+                .expect("not initialized"),
             isin: env
                 .storage()
                 .instance()
@@ -370,6 +414,27 @@ impl GreenBondContract {
                 .storage()
                 .instance()
                 .get(&DataKey::WhitelistContract)
+                .expect("not initialized"),
+        }
+    }
+
+    pub fn get_coupon_terms(env: Env) -> CouponTerms {
+        extend_instance_ttl(&env);
+        CouponTerms {
+            annual_rate_bps: env
+                .storage()
+                .instance()
+                .get(&DataKey::CouponRateBps)
+                .expect("not initialized"),
+            periods_per_year: env
+                .storage()
+                .instance()
+                .get(&DataKey::CouponPeriodsPerYear)
+                .expect("not initialized"),
+            settlement_asset: env
+                .storage()
+                .instance()
+                .get(&DataKey::SettlementAsset)
                 .expect("not initialized"),
         }
     }
