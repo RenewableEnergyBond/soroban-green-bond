@@ -12,7 +12,7 @@
 
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, Env};
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -29,6 +29,29 @@ pub enum DataKey {
     Whitelisted(Address),
     /// Running count of whitelisted addresses (informational)
     WhitelistCount,
+}
+
+#[contractevent(topics = ["wl_initialized"], data_format = "vec")]
+pub struct WhitelistInitialized {
+    pub admin: Address,
+}
+
+#[contractevent(topics = ["wl_add"])]
+pub struct WhitelistAdded {
+    #[topic]
+    pub address: Address,
+}
+
+#[contractevent(topics = ["wl_remove"])]
+pub struct WhitelistRemoved {
+    #[topic]
+    pub address: Address,
+}
+
+#[contractevent(topics = ["admin_transfer"], data_format = "vec")]
+pub struct AdminTransferred {
+    pub admin: Address,
+    pub new_admin: Address,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,8 +115,7 @@ impl KycWhitelistContract {
         env.storage().instance().set(&DataKey::Initialized, &true);
         extend_instance_ttl(&env);
 
-        env.events()
-            .publish((Symbol::new(&env, "wl_initialized"),), (&admin,));
+        WhitelistInitialized { admin }.publish(&env);
     }
 
     // -----------------------------------------------------------------------
@@ -134,14 +156,14 @@ impl KycWhitelistContract {
 
             // Address indexed as a topic so a per-investor whitelist history
             // can be queried without scanning all events.
-            env.events()
-                .publish((Symbol::new(&env, "wl_add"), address.clone()), ());
+            WhitelistAdded { address }.publish(&env);
         }
     }
 
     /// Remove `address` from the whitelist. Only callable by the admin.
     /// Emits a `wl_remove` event.
     pub fn remove(env: Env, address: Address) {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -171,13 +193,23 @@ impl KycWhitelistContract {
                     .set(&DataKey::WhitelistCount, &(count - 1));
             }
 
-            env.events()
-                .publish((Symbol::new(&env, "wl_remove"), address.clone()), ());
+            WhitelistRemoved { address }.publish(&env);
         }
+    }
+
+    /// Refresh the contract instance and an investor's persistent whitelist entry.
+    /// Anyone may call this; the caller pays the storage-rent transaction fee.
+    pub fn refresh_entry_ttl(env: Env, address: Address) -> bool {
+        extend_instance_ttl(&env);
+        let key = DataKey::Whitelisted(address);
+        let exists = env.storage().persistent().has(&key);
+        extend_entry_ttl(&env, &key);
+        exists
     }
 
     /// Transfer admin rights to `new_admin`. Only callable by the current admin.
     pub fn transfer_admin(env: Env, new_admin: Address) {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -187,8 +219,7 @@ impl KycWhitelistContract {
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
 
-        env.events()
-            .publish((Symbol::new(&env, "admin_transfer"),), (&admin, &new_admin));
+        AdminTransferred { admin, new_admin }.publish(&env);
     }
 
     // -----------------------------------------------------------------------
@@ -199,6 +230,7 @@ impl KycWhitelistContract {
     /// This is the function invoked cross-contract by the Green Bond on every
     /// `mint` and `transfer` call.
     pub fn is_wl(env: Env, address: Address) -> bool {
+        extend_instance_ttl(&env);
         let key = DataKey::Whitelisted(address);
         extend_entry_ttl(&env, &key);
         env.storage().persistent().get(&key).unwrap_or(false)
@@ -206,6 +238,7 @@ impl KycWhitelistContract {
 
     /// Returns the current admin address.
     pub fn get_admin(env: Env) -> Address {
+        extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::Admin)
@@ -214,6 +247,7 @@ impl KycWhitelistContract {
 
     /// Returns the number of whitelisted addresses.
     pub fn whitelist_count(env: Env) -> u32 {
+        extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::WhitelistCount)

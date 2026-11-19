@@ -39,6 +39,17 @@ fn test_double_initialize_panics() {
     client.initialize(&other_admin);
 }
 
+#[test]
+#[should_panic]
+fn test_initialize_requires_admin_auth() {
+    let env = Env::default();
+    let contract_id = env.register(KycWhitelistContract, ());
+    let client = KycWhitelistContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin);
+}
+
 // ---------------------------------------------------------------------------
 // Whitelist management tests
 // ---------------------------------------------------------------------------
@@ -52,6 +63,16 @@ fn test_add_investor_marks_whitelisted() {
     client.add(&investor);
     assert!(client.is_wl(&investor));
     assert_eq!(client.whitelist_count(), 1);
+}
+
+#[test]
+#[should_panic]
+fn test_add_requires_admin_auth() {
+    let (env, client, _) = setup();
+    let investor = Address::generate(&env);
+    env.mock_auths(&[]);
+
+    client.add(&investor);
 }
 
 #[test]
@@ -117,4 +138,16 @@ fn test_transfer_admin() {
 
     client.transfer_admin(&new_admin);
     assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+fn test_refresh_entry_ttl_reports_existing_entry() {
+    let (env, client, _) = setup();
+    let investor = Address::generate(&env);
+    let random = Address::generate(&env);
+
+    client.add(&investor);
+
+    assert!(client.refresh_entry_ttl(&investor));
+    assert!(!client.refresh_entry_ttl(&random));
 }
