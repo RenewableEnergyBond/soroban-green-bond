@@ -27,8 +27,10 @@ pub enum DataKey {
     Issuer,
     /// Maximum number of tokens that can ever be minted
     TotalSupply,
-    /// Tokens already minted (circulating supply)
+    /// Tokens currently outstanding (legacy storage key name)
     MintedSupply,
+    /// Tokens ever issued; burns never decrease this value
+    LifetimeIssuedSupply,
     /// Unix timestamp (seconds) at which the bond matures
     MaturityTimestamp,
     /// Annual coupon rate in basis points (e.g. 500 = 5.00 %)
@@ -59,7 +61,9 @@ pub enum DataKey {
 pub struct BondInfo {
     pub issuer: Address,
     pub total_supply: i128,
+    /// Current outstanding supply (retained for compatibility with the prior field name).
     pub minted_supply: i128,
+    pub lifetime_issued_supply: i128,
     pub maturity_timestamp: u64,
     pub coupon_rate_bps: u32,
     pub isin: String,
@@ -158,6 +162,9 @@ impl GreenBondContract {
             .set(&DataKey::MintedSupply, &0_i128);
         env.storage()
             .instance()
+            .set(&DataKey::LifetimeIssuedSupply, &0_i128);
+        env.storage()
+            .instance()
             .set(&DataKey::MaturityTimestamp, &maturity_timestamp);
         env.storage()
             .instance()
@@ -198,18 +205,21 @@ impl GreenBondContract {
         // Enforce KYC whitelist
         Self::assert_whitelisted(&env, &to);
 
-        // Enforce supply cap
-        let minted: i128 = env
+        // Burns reduce outstanding supply, but must never restore issuance capacity.
+        let lifetime_issued: i128 = env
             .storage()
             .instance()
-            .get(&DataKey::MintedSupply)
+            .get(&DataKey::LifetimeIssuedSupply)
             .unwrap_or(0);
         let total: i128 = env
             .storage()
             .instance()
             .get(&DataKey::TotalSupply)
             .expect("not initialized");
-        assert!(minted + amount <= total, "exceeds total_supply cap");
+        assert!(
+            lifetime_issued + amount <= total,
+            "exceeds total_supply cap"
+        );
 
         // Update balances
         let current: i128 = env
@@ -221,9 +231,17 @@ impl GreenBondContract {
             .persistent()
             .set(&DataKey::Balance(to.clone()), &(current + amount));
         extend_balance_ttl(&env, &DataKey::Balance(to.clone()));
+        let outstanding: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MintedSupply)
+            .unwrap_or(0);
         env.storage()
             .instance()
-            .set(&DataKey::MintedSupply, &(minted + amount));
+            .set(&DataKey::MintedSupply, &(outstanding + amount));
+        env.storage()
+            .instance()
+            .set(&DataKey::LifetimeIssuedSupply, &(lifetime_issued + amount));
 
         // Address goes in the topics (indexed) so the dashboard can filter
         // mints by investor without scanning every event.
@@ -302,14 +320,14 @@ impl GreenBondContract {
             .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
         extend_balance_ttl(&env, &DataKey::Balance(from.clone()));
 
-        let minted: i128 = env
+        let outstanding: i128 = env
             .storage()
             .instance()
             .get(&DataKey::MintedSupply)
             .unwrap_or(0);
         env.storage()
             .instance()
-            .set(&DataKey::MintedSupply, &(minted - amount));
+            .set(&DataKey::MintedSupply, &(outstanding - amount));
 
         env.events()
             .publish((Symbol::new(&env, "burn"), from.clone()), amount);
@@ -367,6 +385,11 @@ impl GreenBondContract {
                 .storage()
                 .instance()
                 .get(&DataKey::MintedSupply)
+                .unwrap_or(0),
+            lifetime_issued_supply: env
+                .storage()
+                .instance()
+                .get(&DataKey::LifetimeIssuedSupply)
                 .unwrap_or(0),
             maturity_timestamp: env
                 .storage()

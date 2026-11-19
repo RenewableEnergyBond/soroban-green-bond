@@ -52,6 +52,7 @@ fn test_initialize_stores_bond_info() {
     assert_eq!(info.issuer, issuer);
     assert_eq!(info.total_supply, 1_000_000);
     assert_eq!(info.minted_supply, 0);
+    assert_eq!(info.lifetime_issued_supply, 0);
     assert_eq!(info.maturity_timestamp, 1_900_000_000);
     assert_eq!(info.coupon_rate_bps, 500);
 }
@@ -88,7 +89,10 @@ fn test_metadata_is_exposed() {
 
     init_bond(&env, &bond, &issuer, &mock_whitelist);
 
-    assert_eq!(bond.name(), String::from_str(&env, "Rebond Green Bond 2032"));
+    assert_eq!(
+        bond.name(),
+        String::from_str(&env, "Rebond Green Bond 2032")
+    );
     assert_eq!(bond.symbol(), String::from_str(&env, "RGB32"));
     assert_eq!(bond.decimals(), 0);
 }
@@ -215,7 +219,43 @@ fn test_burn_reduces_balance_and_supply() {
     bond.burn(&holder, &400_i128);
 
     assert_eq!(bond.balance(&holder), 600);
-    assert_eq!(bond.get_bond_info().minted_supply, 600);
+    let info = bond.get_bond_info();
+    assert_eq!(info.minted_supply, 600);
+    assert_eq!(info.lifetime_issued_supply, 1_000);
+}
+
+#[test]
+#[should_panic(expected = "exceeds total_supply cap")]
+fn test_burn_does_not_restore_lifetime_issuance_capacity() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let (wl_id, wl) = deploy_whitelist(&env, &admin);
+    let bond_id = env.register(GreenBondContract, ());
+    let bond = GreenBondContractClient::new(&env, &bond_id);
+    let issuer = Address::generate(&env);
+    let holder = Address::generate(&env);
+
+    bond.initialize(
+        &issuer,
+        &1_000_i128,
+        &1_900_000_000_u64,
+        &500_u32,
+        &String::from_str(&env, "FRRBD00001"),
+        &String::from_str(&env, "Rebond Green Bond 2032"),
+        &String::from_str(&env, "RGB32"),
+        &0_u32,
+        &wl_id,
+    );
+
+    wl.add(&holder);
+    bond.mint(&holder, &1_000_i128);
+    bond.burn(&holder, &400_i128);
+
+    // The lifetime issuance cap remains exhausted even though 400 tokens
+    // are no longer outstanding.
+    bond.mint(&holder, &400_i128);
 }
 
 #[test]
@@ -240,4 +280,3 @@ fn test_burn_more_than_balance_reverts() {
     // Burning more than the balance must revert.
     bond.burn(&holder, &500_i128);
 }
-
