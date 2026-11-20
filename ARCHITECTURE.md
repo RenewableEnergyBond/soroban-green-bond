@@ -110,6 +110,8 @@ graph TB
 
 Core MiFID II security token. All bond parameters are immutably stored on-chain at initialization.
 
+**Current representation:** custom SEP-41 Soroban token plus a separate KYC whitelist. The Integration Track's migration to a native Stellar asset with issuer authorization/clawback flags is not implemented by this coupon PoC and requires a separate migration and ADR.
+
 | Function | Auth | Description |
 |---|---|---|
 | `initialize(BondConfig)` | once | Stores immutable bond terms, annual coupon rate, `coupon_periods_per_year` (1/2/4), settlement SAC, SEP-41 metadata, and whitelist contract |

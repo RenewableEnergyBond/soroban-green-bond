@@ -64,8 +64,9 @@ Example normalized JSONL event:
 
 ## Consequences and limitations
 
+- This ADR does not migrate the current custom SEP-41 Green Bond contract to an issuer-backed native Stellar asset. The repository still has the custom token and KYC whitelist; the Integration Track's `AUTH_REQUIRED`, revocable authorization, and clawback design needs a separate architecture decision and implementation. Do not describe the native-asset migration as delivered yet.
 - Changing `BondConfig` changes the contract interface; existing testnet deployments are historical and must be redeployed. Their IDs must not be used for resubmission.
-- The snapshot export remains an issuer/operator responsibility. Merkle verification proves inclusion, not that the source event export or selected record ledger is correct.
+- The snapshot export remains an issuer/operator responsibility. The generator understands normalized `mint`, `transfer`, `burn`, and `clawback` JSONL events; Merkle verification proves inclusion, not that the source event export or selected record ledger is correct.
 - The tool requires the caller to obtain the record-ledger outstanding supply, settlement SAC ID, bond coupon terms, and settlement decimals from verified chain state/configuration.
 - EURC SAC provenance must be verified during deployment/configuration; symbol or name alone is not cryptographic proof of issuer.
 - Mainnet deployment requires an independent review of the snapshot procedure, root generation, claim-window policy, keeper/TTL operations, and legal treatment of unclaimed coupons.
