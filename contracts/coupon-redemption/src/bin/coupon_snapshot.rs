@@ -100,10 +100,10 @@ fn replay_snapshot(
                 subtract_balance(&mut balances, &from, event.amount)?;
                 add_balance(&mut balances, Some(to), event.amount)?;
             }
-            "burn" => {
+            "burn" | "clawback" => {
                 let from = event
                     .from
-                    .ok_or_else(|| "burn event is missing from".to_owned())?;
+                    .ok_or_else(|| format!("{} event is missing from", event.kind))?;
                 subtract_balance(&mut balances, &from, event.amount)?;
             }
             _ => return Err(format!("unsupported bond event kind: {}", event.kind)),
@@ -429,12 +429,13 @@ mod tests {
     fn replays_snapshot_in_ledger_order_and_excludes_later_events() {
         let events = r#"
 {"ledger":3,"transaction_index":0,"event_index":0,"kind":"transfer","from":"G-holder-a","to":"G-holder-b","amount":"40"}
+{"ledger":3,"transaction_index":0,"event_index":1,"kind":"clawback","from":"G-holder-b","amount":"10"}
 {"ledger":1,"transaction_index":0,"event_index":0,"kind":"mint","to":"G-holder-a","amount":"100"}
 {"ledger":4,"transaction_index":0,"event_index":0,"kind":"burn","from":"G-holder-b","amount":"10"}
 "#;
         let snapshot = replay_snapshot(events, 3).unwrap();
         assert_eq!(snapshot.get("G-holder-a"), Some(&60));
-        assert_eq!(snapshot.get("G-holder-b"), Some(&40));
+        assert_eq!(snapshot.get("G-holder-b"), Some(&30));
     }
 
     #[test]
